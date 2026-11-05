@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: EUPL-1.2
+[Unit]
+Description=Morse trenazer (waitress, 127.0.0.1:8080)
+After=network.target
+
+[Service]
+User=@USER@
+Group=@USER@
+WorkingDirectory=@DIR@
+ExecStart=@DIR@/.venv/bin/python -m server.wsgi
+Restart=on-failure
+RestartSec=3
+MemoryMax=120M
+
+# Zpevnění: služba smí zapisovat jen do data/
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@DIR@/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

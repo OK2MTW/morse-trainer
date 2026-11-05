@@ -1,0 +1,4 @@
+# .venv se vytváří s --system-site-packages (Flask z Raspberry Pi OS: python3-flask). Licence viz README.
+flask>=2.2
+waitress>=2.1
+argon2-cffi>=21.1

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: EUPL-1.2
+# Pinggy tunel pro veřejný přístup (instaluje deploy/pinggy-setup.sh, @USER@/@DIR@/@HOME@ doplní při instalaci).
+#   sudo systemctl enable --now morse-pinggy   = zapnout (i po restartu Pi)
+#   sudo systemctl stop morse-pinggy           = okamžité odpojení zvenku (disable = i po restartu Pi)
+# Token je v /etc/morse-trainer/pinggy.env (root, 600), ne v gitu. Přihlášení chrání aplikace (E3), ne heslo tunelu.
+[Unit]
+Description=Morse trenazer - Pinggy tunel (verejny pristup)
+After=network-online.target nginx.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+User=@USER@
+EnvironmentFile=/etc/morse-trainer/pinggy.env
+ExecStart=/usr/bin/ssh -p 443 -t -R0:127.0.0.1:8090 \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+    -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=@HOME@/.ssh/known_hosts_pinggy \
+    ${PINGGY_TOKEN}@pro.pinggy.io x:https x:xff
+Restart=always
+RestartSec=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@HOME@/.ssh
+MemoryMax=30M
+
+[Install]
+WantedBy=multi-user.target

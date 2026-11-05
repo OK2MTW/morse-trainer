@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14213d">
+  <title>Morse trenažer</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/css/app.css">
+  <script type="module" src="/js/main.js"></script>
+</head>
+<body>
+  <header class="top">
+    <h1><span class="brand-long">Morse trenažer</span><span class="brand-short">Morse</span></h1>
+    <nav class="tabs">
+      <button type="button" data-go="home">Domů</button>
+      <button type="button" data-go="stats" class="training-only">Pokrok</button>
+      <div class="usermenu">
+        <button type="button" id="user-btn" class="avatar" aria-haspopup="true" aria-expanded="false"
+          aria-controls="user-menu" title="Účet a nastavení"><span id="user-initial">?</span></button>
+        <div id="user-menu" class="menu" hidden>
+          <p class="menu-nick" id="tab-account">Účet</p>
+          <button type="button" data-go="settings">Nastavení</button>
+          <button type="button" data-go="account">Účet a zařízení</button>
+          <a href="/o-aplikaci.html">O aplikaci</a>
+          <button type="button" id="menu-logout">Odhlásit</button>
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <main class="content">
+    <p id="banner" class="banner" hidden></p>
+
+    <!-- ===== PŘIHLÁŠENÍ ===== -->
+    <section id="view-login" class="view" hidden>
+      <form class="card form" id="form-login">
+        <h2>Přihlášení</h2>
+        <label>Přezdívka <input name="nick" autocomplete="username" required maxlength="24"></label>
+        <label>Heslo <input name="password" type="password" autocomplete="current-password" required maxlength="128"></label>
+        <p class="form-error" aria-live="polite"></p>
+        <button type="submit" class="big">Přihlásit</button>
+        <p class="hint">Účet se zakládá jen na pozvánku – odkaz ti pošle správce nebo trenér.
+          Zapomenuté heslo: požádej správce nebo trenéra o odkaz pro nové heslo (trénink ti zůstane).</p>
+      </form>
+    </section>
+
+    <!-- ===== REGISTRACE Z POZVÁNKY ===== -->
+    <section id="view-register" class="view" hidden>
+      <form class="card form" id="form-register">
+        <h2>Založení účtu</h2>
+        <p id="reg-info" class="hint"></p>
+        <label>Přezdívka <small>(3–24 znaků, uvidí ji trenér)</small>
+          <input name="nick" autocomplete="username" required minlength="3" maxlength="24"></label>
+        <label>Heslo
+          <input name="password" type="password" autocomplete="new-password" required></label>
+        <label>Heslo znovu
+          <input name="password2" type="password" autocomplete="new-password" required></label>
+        <label>Věková skupina <small>(nepovinné, pomůže přizpůsobit trénink)</small>
+          <select name="age_group">
+            <option value="">neuvádím</option>
+            <option value="do15">do 15 let</option>
+            <option value="15-17">15–17 let</option>
+            <option value="18-59">18–59 let</option>
+            <option value="60+">60 a více</option>
+          </select></label>
+        <label class="check" id="reg-consent" hidden><input type="checkbox" name="parent_consent">
+          Jsem rodič (zákonný zástupce) a souhlasím, že si dítě účet zakládá.</label>
+        <p class="hint">Ukládáme jen přezdívku, věkovou skupinu, nastavení a výsledky lekcí. Žádný e-mail,
+          žádné zdravotní údaje. Data si můžeš kdykoli stáhnout nebo smazat v kartě Účet.</p>
+        <p class="form-error" aria-live="polite"></p>
+        <button type="submit" class="big">Založit účet</button>
+      </form>
+    </section>
+    <!-- ===== NOVÉ HESLO Z ODKAZU (E3) ===== -->
+    <section id="view-reset" class="view" hidden>
+      <form class="card form" id="form-reset">
+        <h2>Nové heslo</h2>
+        <p id="reset-info" class="hint"></p>
+        <label>Nové heslo
+          <input name="password" type="password" autocomplete="new-password" required></label>
+        <label>Nové heslo znovu
+          <input name="password2" type="password" autocomplete="new-password" required></label>
+        <p class="form-error" aria-live="polite"></p>
+        <button type="submit" class="big">Uložit heslo a přihlásit</button>
+        <p class="hint">Tvůj trénink zůstává. Ostatní zařízení se odhlásí.</p>
+      </form>
+    </section>
+
+    <!-- ===== VYNUCENÁ ZMĚNA HESLA (E3) ===== -->
+    <section id="view-pwchange" class="view" hidden>
+      <form class="card form" id="form-pwchange">
+        <h2>Nastav si nové heslo</h2>
+        <p class="hint">Aplikace má nová, bezpečnější pravidla pro heslo. Než budeš pokračovat, nastav si prosím
+          nové heslo. Tvůj trénink zůstává.</p>
+        <label>Současné heslo <input name="old" type="password" autocomplete="current-password" required></label>
+        <label>Nové heslo
+          <input name="new" type="password" autocomplete="new-password" required></label>
+        <label>Nové heslo znovu
+          <input name="new2" type="password" autocomplete="new-password" required></label>
+        <p class="form-error" aria-live="polite"></p>
+        <button type="submit" class="big">Uložit nové heslo</button>
+        <button type="button" id="pwchange-logout">Odhlásit</button>
+        <p class="hint">Nepamatuješ si současné heslo? Požádej správce nebo trenéra o odkaz na nové heslo a otevři ho
+          (správce: <code>server.admin obnova PŘEZDÍVKA</code> na serveru).</p>
+      </form>
+    </section>
+
+    <!-- ===== DOMŮ ===== -->
+    <section id="view-home" class="view" hidden>
+      <div class="card">
+        <h2>Tvoje znaky <span id="level-count" class="muted"></span></h2>
+        <div id="level-chars" class="chars"></div>
+        <p id="level-next" class="hint"></p>
+        <button type="button" id="btn-start" class="big">▶ Začít lekci</button>
+        <p class="hint center"><span id="lesson-info"></span></p>
+        <p id="speed-note" class="hint center" hidden></p>
+        <p id="load-info" class="hint center" hidden></p>
+      </div>
+      <div class="card" id="copy-card" hidden>
+        <h2>Příjem ve skluzu <span id="copy-step" class="muted"></span></h2>
+        <p id="copy-desc" class="hint"></p>
+        <button type="button" id="btn-copy" class="big">▶ Lekce ve skluzu</button>
+        <p id="copy-note" class="hint center"></p>
+      </div>
+      <div class="card" id="plan-card">
+        <h2>Osobní plán</h2>
+        <div id="plan-root"></div>
+      </div>
+      <div class="card">
+        <h2>Poslední lekce</h2>
+        <p id="history-empty" class="hint">Zatím žádná lekce.</p>
+        <table class="history"><tbody id="history"></tbody></table>
+      </div>
+    </section>
+
+    <!-- ===== SEZNÁMENÍ S NOVÝM ZNAKEM ===== -->
+    <section id="view-quiz" class="view" hidden>
+      <div class="card">
+        <h2>Dotazník – osobní plán</h2>
+        <div id="quiz-root"></div>
+      </div>
+    </section>
+
+    <section id="view-intro" class="view" hidden>
+      <div class="stage">
+        <p class="stage-label" id="intro-label">Nový znak</p>
+        <div class="big-char" id="intro-char"></div>
+        <p class="stage-status" id="intro-status" aria-live="polite"></p>
+        <div class="buttons center">
+          <button type="button" id="intro-replay">↻ Přehrát znovu</button>
+          <button type="button" id="intro-skip">Přeskočit</button>
+        </div>
+        <button type="button" id="intro-next" class="big" hidden>▶ Začít lekci</button>
+      </div>
+    </section>
+
+    <!-- ===== ROZLIŠOVÁNÍ (po seznámení) ===== -->
+    <section id="view-discrim" class="view" hidden>
+      <div class="stage">
+        <p class="stage-label" id="ds-label">Rozliš</p>
+        <div class="big-char" id="ds-char" aria-live="polite"></div>
+        <p class="stage-status" id="ds-status" aria-live="polite"></p>
+        <div class="buttons center">
+          <button type="button" id="ds-replay">↻ Přehrát znovu</button>
+          <button type="button" id="ds-skip">Přeskočit</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== STATISTIKA ===== -->
+    <section id="view-stats" class="view" hidden>
+      <div id="dash-root"></div>
+      <div id="stats-root"></div>
+    </section>
+
+    <!-- ===== LEKCE ===== -->
+    <section id="view-lesson" class="view" hidden>
+      <div class="lesson-bar">
+        <span id="ls-time">0:00</span>
+        <div class="progress"><div id="ls-progress"></div></div>
+        <span id="ls-acc">–</span>
+      </div>
+      <p id="ls-phase" class="hint center" hidden></p>
+      <div class="stage">
+        <div class="big-char" id="ls-char" aria-live="polite"></div>
+        <p class="stage-status" id="ls-status" aria-live="polite"></p>
+      </div>
+      <div id="pause-overlay" class="overlay" hidden>
+        <div class="card center">
+          <h2>Pauza <span id="pause-time" class="muted">0:00</span></h2>
+          <p class="hint" id="pause-hint">Čas lekce stojí.</p>
+          <button type="button" id="btn-resume" class="big">▶ Pokračovat</button>
+          <button type="button" id="btn-finish">Ukončit lekci</button>
+        </div>
+      </div>
+      <div id="fatigue-overlay" class="overlay" hidden>
+        <div class="card center">
+          <h2>Možná únava</h2>
+          <p id="fat-text"></p>
+          <button type="button" id="fat-pause" class="big">⏸ Dát si pauzu</button>
+          <div class="buttons center">
+            <button type="button" id="fat-end">Ukončit lekci</button>
+            <button type="button" id="fat-continue">Pokračovat</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== LEKCE VE SKLUZU (M7) ===== -->
+    <section id="view-copy" class="view" hidden>
+      <div class="lesson-bar">
+        <span id="cp-time">0:00</span>
+        <div class="progress"><div id="cp-progress"></div></div>
+        <span id="cp-acc">–</span>
+      </div>
+      <p id="cp-phase" class="hint center"></p>
+      <div class="copy-stage">
+        <div id="cp-typed" class="copy-typed" aria-live="off"></div>
+        <div id="cp-marks" class="copy-marks" aria-live="polite"></div>
+        <div id="cp-review" class="copy-review" hidden></div>
+        <p id="cp-status" class="stage-status center" aria-live="polite"></p>
+        <div class="buttons center">
+          <button type="button" id="cp-next" class="big" hidden>▶ Další řádek</button>
+          <button type="button" id="cp-pause">⏸ Pauza</button>
+        </div>
+      </div>
+      <div id="cp-pause-overlay" class="overlay" hidden>
+        <div class="card center">
+          <h2>Pauza <span id="cp-pause-time" class="muted">0:00</span></h2>
+          <p class="hint">Rozehraný řádek se nehodnotí. Čas lekce stojí.</p>
+          <button type="button" id="cp-resume" class="big">▶ Pokračovat</button>
+          <button type="button" id="cp-finish">Ukončit lekci</button>
+        </div>
+      </div>
+      <div id="cp-fatigue-overlay" class="overlay" hidden>
+        <div class="card center">
+          <h2>Možná únava</h2>
+          <p id="cp-fat-text"></p>
+          <button type="button" id="cp-fat-pause" class="big">⏸ Dát si pauzu</button>
+          <div class="buttons center">
+            <button type="button" id="cp-fat-end">Ukončit lekci</button>
+            <button type="button" id="cp-fat-continue">Pokračovat</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-copyresult" class="view" hidden>
+      <div class="card">
+        <h2>Výsledek lekce ve skluzu</h2>
+        <div class="kpis">
+          <div><b id="cr-acc"></b><span>po zarovnání</span></div>
+          <div><b id="cr-words"></b><span>slov správně</span></div>
+          <div><b id="cr-lag"></b><span>skluz (medián)</span></div>
+        </div>
+        <p id="cr-verdict" class="verdict"></p>
+        <p id="cr-detail" class="hint"></p>
+        <p id="cr-load" class="hint" hidden></p>
+        <button type="button" id="btn-copy-again" class="big">▶ Další lekce ve skluzu</button>
+        <button type="button" data-go="home">Domů</button>
+      </div>
+    </section>
+
+    <!-- ===== VÝSLEDEK ===== -->
+    <section id="view-result" class="view" hidden>
+      <div class="card">
+        <h2>Výsledek lekce</h2>
+        <div class="kpis">
+          <div><b id="rs-acc"></b><span>úspěšnost</span></div>
+          <div><b id="rs-ttr"></b><span>medián reakce</span></div>
+          <div><b id="rs-n"></b><span>znaků</span></div>
+        </div>
+        <p id="rs-verdict" class="verdict"></p>
+        <p id="rs-load" class="hint" hidden></p>
+        <button type="button" id="btn-again" class="big">▶ Další lekce</button>
+        <button type="button" data-go="home">Domů</button>
+      </div>
+      <div class="card">
+        <h2>Podle znaků</h2>
+        <table class="perchar">
+          <thead><tr><th>Znak</th><th>Počet</th><th>Správně</th><th>Reakce</th><th title="proti dlouhodobé statistice">Trend</th></tr></thead>
+          <tbody id="rs-perchar"></tbody>
+        </table>
+        <p id="rs-conf" class="hint"></p>
+      </div>
+    </section>
+
+    <!-- ===== ÚČET ===== -->
+    <section id="view-account" class="view" hidden>
+      <div class="card">
+        <h2>Můj účet</h2>
+        <table class="diag"><tbody id="acc-info"></tbody></table>
+        <div class="buttons">
+          <button type="button" id="acc-sync">⟳ Synchronizovat</button>
+          <a class="button" href="/api/export" download>⬇ Stáhnout moje data</a>
+        </div>
+      </div>
+      <form class="card form" id="form-password">
+        <h2>Změna hesla</h2>
+        <label>Současné heslo <input name="old" type="password" autocomplete="current-password" required></label>
+        <label>Nové heslo
+          <input name="new" type="password" autocomplete="new-password" required></label>
+        <label>Nové heslo znovu
+          <input name="new2" type="password" autocomplete="new-password" required></label>
+        <p class="form-error" aria-live="polite"></p>
+        <button type="submit">Změnit heslo</button>
+        <p class="hint">Ostatní zařízení se po změně odhlásí.</p>
+      </form>
+      <div class="card" id="acc-training">
+        <h2>Výcvik</h2>
+        <button type="button" id="acc-reset" class="danger">Resetovat výcvik…</button>
+        <p class="hint">Smaže všechny lekce a pokrok – začneš znovu od 2 znaků. Nastavení zvuku a rychlosti zůstane.</p>
+      </div>
+      <div class="card">
+        <h2>Odhlášení a smazání</h2>
+        <div class="buttons">
+          <button type="button" id="acc-logout">Odhlásit</button>
+          <button type="button" id="acc-logout-all">Odhlásit všude</button>
+          <button type="button" id="acc-delete" class="danger">Smazat účet…</button>
+        </div>
+        <p class="hint">Odhlášení smaže tvoje data z tohoto zařízení (na serveru zůstanou).
+          Smazání účtu nevratně odstraní účet i všechna data na serveru.</p>
+      </div>
+
+      <div id="admin" hidden>
+        <form class="card form" id="form-invite">
+          <h2>Pozvat nového uživatele</h2>
+          <label>Role <select name="role" id="inv-role">
+            <option value="zak">žák</option>
+            <option value="trener">trenér</option>
+            <option value="admin">správce</option>
+          </select></label>
+          <label>Pro koho <small>(poznámka, nepovinné)</small> <input name="note" maxlength="60"></label>
+          <p class="form-error" aria-live="polite"></p>
+          <button type="submit">Vytvořit pozvánku</button>
+          <div id="inv-result" hidden>
+            <p class="hint" id="inv-hint">Odkaz platí 7 dní a jen jednou. Pošli ho pozvanému (např. zprávou):</p>
+            <input id="inv-link" readonly>
+            <div class="buttons">
+              <button type="button" id="inv-copy">Kopírovat</button>
+              <button type="button" id="inv-share" hidden>Sdílet…</button>
+            </div>
+          </div>
+        </form>
+        <div class="card">
+          <h2>Pozvánky</h2>
+          <table class="list"><tbody id="inv-list"></tbody></table>
+        </div>
+        <div class="card">
+          <h2 id="users-title">Uživatelé</h2>
+          <table class="list"><tbody id="users-list"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== NASTAVENÍ ===== -->
+    <section id="view-settings" class="view" hidden>
+      <div class="card training-only">
+        <h2>Zvuk a rychlost</h2>
+        <div class="stepper" data-key="wpm" data-min="12" data-max="40" data-step="1" data-unit=" WPM">
+          <span class="st-label">Rychlost znaku</span></div>
+        <div class="stepper" data-key="fwpm" data-min="3" data-max="40" data-step="1" data-unit=" WPM">
+          <span class="st-label">Mezery <small>(Farnsworth)</small></span></div>
+        <div class="stepper" data-key="freq" data-min="350" data-max="900" data-step="25" data-unit=" Hz">
+          <span class="st-label">Tón</span></div>
+        <div class="stepper" data-key="volume" data-min="0.1" data-max="1" data-step="0.1" data-unit=" %" data-scale="100">
+          <span class="st-label">Hlasitost</span></div>
+        <label class="check"><input type="checkbox" id="auto-speed"> Trenér řídí tempo <small>(mezery a rychlost podle výsledků)</small></label>
+        <p class="hint">Mezery (Farnsworth) se zkracují až po celé sadě: po 2 sezeních ≥ 90 % se stabilní reakcí o krok, až na 20/20 WPM.
+          Při trvale nízké úspěšnosti se prodlouží. Ruční změna platí – trenér pak čeká na nová data.</p>
+        <p id="wpm-warn" class="hint warn" hidden>Pod 15 WPM se znaky přestávají slyšet jako celek a svádí to k počítání teček. Doporučeno 20 WPM.</p>
+        <div class="buttons">
+          <button type="button" id="play-k">Přehrát K</button>
+          <button type="button" id="play-paris">Přehrát PARIS PARIS</button>
+        </div>
+      </div>
+      <div class="card training-only">
+        <h2>Lekce</h2>
+        <div class="stepper" data-key="lessonMin" data-min="1" data-max="10" data-step="1" data-unit=" min">
+          <span class="st-label">Délka lekce <small>(blok)</small></span></div>
+        <p class="hint">Doporučeno 5–10 min. Po 30 min souvislého cvičení trenér navrhne konec, nad 60 min za den upozorní.</p>
+        <div class="stepper" data-key="level" data-target="progress" data-min="2" data-max="51" data-step="1" data-unit=" znaků">
+          <span class="st-label">Počet znaků <small>(ručně)</small></span></div>
+      </div>
+      <div class="card">
+        <h2>Diagnostika</h2>
+        <button type="button" id="install" hidden>⬇ Nainstalovat jako aplikaci</button>
+        <table class="diag"><tbody id="diag"></tbody></table>
+        <p class="hint"><a id="other-site" href="/" rel="noopener"></a><br>Domácí a venkovní verze jsou dvě samostatné
+          aplikace (každá s vlastním přihlášením), lekce se synchronizují přes účet.</p>
+        <p class="hint"><a href="/o-aplikaci.html">O aplikaci, licence a poděkování</a></p>
+      </div>
+    </section>
+  </main>
+
+  <nav id="keyboard" aria-label="Klávesnice" hidden></nav>
+</body>
+</html>
