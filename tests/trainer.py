@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Python port logiky trenéra z web/js/drill.js (pro simulace a testy – na Pi není JS engine).
+"""Python port of the trainer logic from web/js/drill.js (for simulations and tests – there is no JS engine on the Pi).
 
-Konstanty a tabulky se čtou přímo z JS souborů, aby se port nerozešel s originálem.
-Při změně drill.js upravit i tuto kopii (test_trainer.py hlídá konstanty a tabulky).
+Constants and tables are read directly from the JS files so that the port does not drift from the original.
+When drill.js changes, update this copy too (test_trainer.py checks the constants and tables).
 """
 import math
 import random
@@ -99,7 +99,7 @@ class Drill:
         self.gap_ease = 0
         self.gap_at = 0
         self.gap_log = []
-        self.regulation = True  # jen pro simulace (vypnutí smyčky a)
+        self.regulation = True  # only for simulations (turning off loop a)
         self.exclude = set()
         self.conf_n = {c: 0 for c in self.chars}
         for c, p in self.prior.items():

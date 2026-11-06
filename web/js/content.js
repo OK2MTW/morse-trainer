@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Obsah lekce ve skluzu (M7): registr generátorů podle druhu obsahu. Položky jen ze zvládnutých znaků.
-// M8 (U4): zkratky a Q-kódy, generované volací znaky, dlouhá slova, směs. U5 přidá QSO – stačí doplnit GENERATORS.
+// Content of a copy-behind lesson (M7): a registry of generators by content kind. Items only from mastered characters.
+// M8 (U4): abbreviations and Q codes, generated call signs, long words, a mix. U5 adds QSO – just extend GENERATORS.
 // Python port: tests/content.py.
 import { WORDS, WORDS_LONG } from './words.js';
 import { ABBR } from './abbr.js';
 
-export const GROUP_MIN = 2;          // skupiny 2–3 znaky (krok 1–2 žebříku)
+export const GROUP_MIN = 2;          // groups of 2–3 characters (ladder steps 1–2)
 export const GROUP_MAX = 3;
-export const SHARE_LETTERS = 0.7;    // skupiny: písmena 70 %, číslice 20 %, interpunkce 10 %
+export const SHARE_LETTERS = 0.7;    // groups: letters 70 %, digits 20 %, punctuation 10 %
 export const SHARE_DIGITS = 0.2;
-export const PSEUDO_MIN = 2;         // pseudoslova 2–5 znaků (krok 3–4), jen písmena
+export const PSEUDO_MIN = 2;         // pseudo-words of 2–5 characters (steps 3–4), letters only
 export const PSEUDO_MAX = 5;
-export const WORDS_MIN = 30;         // méně dostupných slov → doplnit pseudoslovy
-export const ABBR_MIN = 15;          // M8: méně dostupných zkratek → doplnit slovy
-export const LONG_MIN = 20;          // M8: méně dlouhých slov → doplnit krátkými
-export const CALL_SLASH = 0.1;       // M8: volací znak s /P nebo /M
-export const MIX_WORDS = 0.5;        // M8 směs: slova 50 % (půl krátká, půl dlouhá), zkratky 30 %, volací znaky 20 %
+export const WORDS_MIN = 30;         // fewer available words → fill up with pseudo-words
+export const ABBR_MIN = 15;          // M8: fewer available abbreviations → fill up with words
+export const LONG_MIN = 20;          // M8: fewer long words → fill up with short ones
+export const CALL_SLASH = 0.1;       // M8: call sign with /P or /M
+export const MIX_WORDS = 0.5;        // M8 mix: words 50 % (half short, half long), abbreviations 30 %, call signs 20 %
 export const MIX_ABBR = 0.3;
-// Formát volacího znaku prefix–číslice–sufix (L = písmeno, D = číslice) – generuje se, žádný seznam stanic.
+// Call sign format prefix–digit–suffix (L = letter, D = digit) – generated, no list of stations.
 export const CALL_PREFIXES = ['L', 'LL', 'LL', 'DL'];
 export const CALL_SUFFIX = [1, 2, 2, 3, 3, 3];
-// Šablony pseudoslov: C = souhláska, V = samohláska (snadno „vyslovitelné“ celky pro rozpoznání slovem, ICR).
+// Pseudo-word templates: C = consonant, V = vowel (easily "pronounceable" units for whole-word recognition, ICR).
 export const PSEUDO_TEMPLATES = ['CV', 'VC', 'CVC', 'VCV', 'CVCV', 'CVCC', 'CCVC', 'VCVC', 'CVCVC', 'CCVCC'];
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -29,7 +29,7 @@ const VOWELS = 'AEIOU';
 
 const pick = (arr, rng) => arr[Math.floor(rng() * arr.length)];
 
-/** Rozdělí zvládnuté znaky na písmena, číslice a interpunkci. */
+/** Splits mastered characters into letters, digits and punctuation. */
 export function pools(chars) {
   return {
     L: chars.filter((c) => LETTERS.includes(c)),
@@ -38,7 +38,7 @@ export function pools(chars) {
   };
 }
 
-/** Náhodná skupina 2–3 znaků; druh znaku podle podílů (když druh chybí, bere se z ostatních). */
+/** A random group of 2–3 characters; character kind by shares (when a kind is missing, the others are used). */
 export function group(chars, rng) {
   const p = pools(chars);
   const len = GROUP_MIN + Math.floor(rng() * (GROUP_MAX - GROUP_MIN + 1));
@@ -52,7 +52,7 @@ export function group(chars, rng) {
   return out;
 }
 
-/** Pseudoslovo podle šablony; bez samohlásek nebo souhlásek jen náhodná písmena. */
+/** A pseudo-word by template; without vowels or consonants just random letters. */
 export function pseudo(chars, rng) {
   const L = pools(chars).L;
   const V = L.filter((c) => VOWELS.includes(c));
@@ -67,7 +67,7 @@ export function pseudo(chars, rng) {
   return out;
 }
 
-/** Slova jen ze zvládnutých písmen. */
+/** Words from mastered letters only. */
 export function wordsFor(chars) {
   const set = new Set(chars);
   return WORDS.filter((w) => [...w].every((c) => set.has(c)));
@@ -78,10 +78,10 @@ export function word(chars, rng, avail = wordsFor(chars)) {
   return pseudo(chars, rng);
 }
 
-/** Ze seznamu jen položky ze zvládnutých znaků. */
+/** Only the list items made of mastered characters. */
 export const listFor = (list, chars) => { const set = new Set(chars); return list.filter((w) => [...w].every((c) => set.has(c))); };
 
-/** Položka seznamu, když je jich dost (jinak s pravděpodobností podle počtu), jinak náhrada fb(). */
+/** A list item when there are enough (otherwise with a probability by count), else the substitute fb(). */
 function fromList(avail, min, rng, fb) {
   if (avail.length >= min || (avail.length && rng() < avail.length / min)) return pick(avail, rng);
   return fb();
@@ -91,7 +91,7 @@ export function abbr(chars, rng, avail = listFor(ABBR, chars)) { return fromList
 
 export function longWord(chars, rng, avail = listFor(WORDS_LONG, chars)) { return fromList(avail, LONG_MIN, rng, () => word(chars, rng)); }
 
-/** Volací znak prefix–číslice–sufix ze zvládnutých znaků; prefix nezačíná Q (Q-kódy). Bez číslic → slovo. */
+/** Call sign prefix–digit–suffix from mastered characters; the prefix does not start with Q (Q codes). Without digits → a word. */
 export function call(chars, rng) {
   const p = pools(chars);
   const first = p.L.filter((c) => c !== 'Q');
@@ -106,7 +106,7 @@ export function call(chars, rng) {
   return out;
 }
 
-/** Směs pro U4 (příprava na QSO): slova, zkratky a Q-kódy, volací znaky. */
+/** Mix for U4 (preparation for QSOs): words, abbreviations and Q codes, call signs. */
 export function mixed(chars, rng) {
   const r = rng();
   if (r < MIX_WORDS / 2) return word(chars, rng);
@@ -125,7 +125,7 @@ export const GENERATORS = {
   mix: (chars, n, rng) => Array.from({ length: n }, () => mixed(chars, rng)),
 };
 
-/** n položek daného druhu ze zvládnutých znaků. Sousední položky se neopakují. */
+/** n items of the given kind from mastered characters. Neighbouring items do not repeat. */
 export function makeItems(content, chars, n, rng = Math.random) {
   const gen = GENERATORS[content] || GENERATORS.groups;
   const out = [];

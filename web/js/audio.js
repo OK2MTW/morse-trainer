@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Přehrávač Morse tónů s přesným časováním pro měření reakční doby (TTR).
-// Převod textu → Morse a výpočet časování dělá knihovna morse-pro (EUPL-1.2),
-// zvuk generujeme sami: jeden trvalý AudioContext, měkké hrany tónu (bez cvakání),
-// a převod času zvukové karty na performance.now() včetně výstupní latence.
+// Morse tone player with precise timing for measuring the reaction time (TTR).
+// Text → Morse conversion and timing are done by the morse-pro library (EUPL-1.2),
+// the sound is generated here: one persistent AudioContext, soft tone edges (no clicks),
+// and conversion of the sound card clock to performance.now() including the output latency.
 import MorseCW from '../vendor/morse-pro/morse-pro-cw.js';
 import * as WPM from '../vendor/morse-pro/morse-pro-wpm.js';
 
-const RAMP = 0.005; // s – náběh/doběh tónu, odstraní cvakání
-// Rezerva plánování: tón se plánuje aspoň tolik dopředu. Při kratší rezervě (dřív 50 ms) Android
-// při zaneprázdněném hlavním vláknu zmeškal začátek znaku a „dohnal“ ho → znak zněl zrychleně.
-// Reakční dobu to neovlivní – měří se od skutečného konce tónu (toneEnd).
+const RAMP = 0.005; // s – tone rise/fall, removes clicks
+// Scheduling margin: a tone is scheduled at least this far ahead. With a shorter margin (formerly 50 ms) Android
+// missed the start of a character when the main thread was busy and "caught up" → the character sounded faster.
+// It does not affect the reaction time – that is measured from the real end of the tone (toneEnd).
 const LEAD = 0.15;
 
 export class MorsePlayer {
@@ -24,7 +24,7 @@ export class MorsePlayer {
 
   get ready() { return this.ctx !== null && this.ctx.state === 'running'; }
 
-  // Musí se zavolat z obsluhy kliknutí/klepnutí (pravidla autoplay v prohlížečích).
+  // Must be called from a click/tap handler (browser autoplay rules).
   async unlock() {
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -33,16 +33,16 @@ export class MorsePlayer {
       this.master.connect(this.ctx.destination);
     }
     const wasRunning = this.ctx.state === 'running';
-    // 'suspended' i Safari 'interrupted' (hovor, zhasnutá obrazovka) → znovu spustit
-    if (!wasRunning) { try { await this.ctx.resume(); } catch (e) { /* zkusí se příště */ } }
+    // 'suspended' and Safari 'interrupted' (call, screen off) → start again
+    if (!wasRunning) { try { await this.ctx.resume(); } catch (e) { /* retried next time */ } }
     if (!wasRunning && this.ctx.state === 'running') this.warmUp();
     if (this.keep) this.keepAlive(true);
     return this.ctx.state === 'running';
   }
 
-  // Zahřátí: Android po chvíli ticha uspí zvukový výstup a první tón pak usekne/zrychlí.
-  // Prázdný (nulový) buffer některé telefony za zvuk nepovažují, proto hrajeme neslyšitelný
-  // tón (40 Hz, −66 dB) – výstup se rozběhne dřív, než zazní skutečný znak.
+  // Warm-up: after a while of silence Android suspends the audio output and then cuts/speeds up the first tone.
+  // Some phones do not consider an empty (zero) buffer as sound, so we play an inaudible
+  // tone (40 Hz, −66 dB) – the output starts before the real character sounds.
   warmUp(sec = 0.5) {
     if (!this.ready) return;
     const t0 = this.ctx.currentTime;
@@ -55,13 +55,13 @@ export class MorsePlayer {
     osc.stop(t0 + sec);
   }
 
-  // 0.8.5 (validace #3): Bluetooth sluchátka a Android uspí přenos po chvíli ticha a první tón po přestávce
-  // (seznámení → rozlišování → lekce) pak usekne. Během tréninku proto trvale hraje neslyšitelný tón
-  // jako při zahřátí – linka nikdy neusne. Mimo trénink se vypne (baterie).
+  // 0.8.5 (validation #3): Bluetooth headphones and Android suspend the link after a while of silence and then cut the
+  // first tone after a gap (introduction → discrimination → lesson). So during training an inaudible tone plays
+  // continuously as in the warm-up – the link never sleeps. Outside training it is switched off (battery).
   keepAlive(on) {
     this.keep = on;
     if (!on) {
-      if (this._keep) { try { this._keep.stop(); } catch (e) { /* už skončil */ } this._keep = null; }
+      if (this._keep) { try { this._keep.stop(); } catch (e) { /* already finished */ } this._keep = null; }
       return;
     }
     if (this._keep || !this.ready) return;
@@ -83,11 +83,11 @@ export class MorsePlayer {
     };
   }
 
-  // Čas zvukového kontextu (s) → čas performance.now() (ms), kdy to skutečně zazní.
+  // Audio context time (s) → performance.now() time (ms) when it actually sounds.
   ctxToPerf(t) {
     const ts = this.ctx.getOutputTimestamp ? this.ctx.getOutputTimestamp() : null;
-    // Po uspání/probuzení zvuku umí prohlížeč vrátit zastaralé razítko → nesmyslný konec tónu
-    // (lekce pak hrála „moc brzo“ a TTR byla špatně). Razítko bereme jen čerstvé a konzistentní.
+    // After audio suspend/resume the browser may return a stale timestamp → a nonsensical tone end
+    // (the lesson then played "too early" and TTR was wrong). Only a fresh and consistent timestamp is used.
     const now = performance.now();
     if (ts && ts.performanceTime > 0 && now - ts.performanceTime < 1500 && now - ts.performanceTime > -50
         && Math.abs(this.ctx.currentTime - ts.contextTime) < 1.5) {
@@ -97,14 +97,14 @@ export class MorsePlayer {
     return now + (t - this.ctx.currentTime + lat) * 1000;
   }
 
-  // Vrátí časování v ms (kladné = tón, záporné = ticho) – přímo z morse-pro.
+  // Returns the timing in ms (positive = tone, negative = silence) – directly from morse-pro.
   timings(text) {
     const cw = new MorseCW(true, this.settings.wpm, this.settings.fwpm);
     cw.translate(text, false);
     return cw.getTimings();
   }
 
-  // Zastaví hrající znak měkce (5 ms doběh) – tvrdé utnutí cvaká a zní jako „kolize“.
+  // Stops the playing character softly (5 ms fall) – a hard cut clicks and sounds like a "collision".
   stop() {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
@@ -114,21 +114,21 @@ export class MorsePlayer {
         if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now); else g.cancelScheduledValues(now);
         g.setTargetAtTime(0, now, RAMP / 3);
         osc.stop(now + 4 * RAMP);
-      } catch (e) { /* už skončil */ }
+      } catch (e) { /* already finished */ }
     }
     this._active = [];
   }
 
   /**
-   * Přehraje text. Vrací hned (synchronně) časy v performance.now() ms:
-   *   start = začátek prvního tónu, toneEnd = konec posledního tónu,
-   *   done = Promise, která se splní ve chvíli konce posledního tónu.
+   * Plays text. Returns at once (synchronously) times in performance.now() ms:
+   *   start = start of the first tone, toneEnd = end of the last tone,
+   *   done = a Promise resolved at the end of the last tone.
    */
   play(text, delay = LEAD) {
-    if (!this.ready) throw new Error('Zvuk není odemčený');
+    if (!this.ready) throw new Error('Audio is not unlocked');
     this.stop();
     const { freq, volume } = this.settings;
-    const timings = this.timings(text); // výpočet před určením startu, ať nezkracuje rezervu
+    const timings = this.timings(text); // computed before choosing the start so that it does not shorten the margin
     const t0 = this.ctx.currentTime + Math.max(delay, LEAD);
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -163,13 +163,13 @@ export class MorsePlayer {
   }
 
   /**
-   * M7 – proud položek (skupiny/slova) bez čekání na odpověď. Mezery mezi znaky podle Farnsworthu (wpm, fwpm),
-   * mezera mezi položkami = normální mezera mezi slovy × gapX. Vrací hned (performance.now ms):
-   *   chars = [{ch, w, end}] (end = konec posledního tónu znaku), wordEnds = konec posledního tónu položky,
-   *   start, toneEnd, done (Promise na konec posledního tónu).
+   * M7 – a stream of items (groups/words) without waiting for an answer. Gaps between characters by Farnsworth (wpm, fwpm),
+   * the gap between items = the normal word gap × gapX. Returns at once (performance.now ms):
+   *   chars = [{ch, w, end}] (end = end of the last tone of the character), wordEnds = end of the last tone of the item,
+   *   start, toneEnd, done (a Promise for the end of the last tone).
    */
   playStream(items, { gapX = 1, delay = LEAD } = {}) {
-    if (!this.ready) throw new Error('Zvuk není odemčený');
+    if (!this.ready) throw new Error('Audio is not unlocked');
     this.stop();
     const { wpm, fwpm, freq, volume } = this.settings;
     const cs = WPM.charSpace(wpm, fwpm) / 1000;
@@ -178,7 +178,7 @@ export class MorsePlayer {
     const tones = (ch) => {
       if (!cache.has(ch)) {
         const tm = this.timings(ch);
-        while (tm.length && tm.at(-1) < 0) tm.pop(); // bez koncové mezery – mezery skládáme sami
+        while (tm.length && tm.at(-1) < 0) tm.pop(); // without the trailing gap – gaps are composed here
         cache.set(ch, tm);
       }
       return cache.get(ch);
@@ -218,7 +218,7 @@ export class MorsePlayer {
     osc.stop(lastToneEnd + 0.02);
     this._active.push({ osc, gain });
     osc.onended = () => { this._active = this._active.filter((n) => n.osc !== osc); };
-    const off = this.ctxToPerf(t0) - t0 * 1000; // jeden převod pro celý proud (konzistentní časy)
+    const off = this.ctxToPerf(t0) - t0 * 1000; // one conversion for the whole stream (consistent times)
     const perf = (x) => off + x * 1000;
     const toneEnd = perf(lastToneEnd);
     return {

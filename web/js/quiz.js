@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Dotazník (M4): ~12 otázek → server spočítá archetyp, modifikátory a preference. Odpovědi se neukládají.
+// Questionnaire (M4): ~12 questions → the server computes archetype, modifiers and preferences. Answers are not stored.
 import { api } from './api.js';
+import { t } from './i18n.js';
 
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -10,22 +11,21 @@ const el = (tag, cls, text) => {
 };
 
 /**
- * Vykreslí dotazník do root. onDone(info) dostane výsledek serveru (archetyp, modifikátory, preference).
+ * Renders the questionnaire into root. onDone(info) receives the server result (archetype, modifiers, preferences).
  */
 export async function renderQuiz(root, { onDone, onCancel } = {}) {
   root.textContent = '';
-  root.append(el('p', 'hint', 'Načítám otázky…'));
+  root.append(el('p', 'hint', t('quiz.loading')));
   let questions;
   try {
     questions = (await api('GET', '/coach/questions')).questions;
   } catch (e) {
     root.textContent = '';
-    root.append(el('p', 'hint warn', `Dotazník se nepodařilo načíst: ${e.message}`));
+    root.append(el('p', 'hint warn', t('quiz.loadFailed', { msg: e.message })));
     return;
   }
   root.textContent = '';
-  root.append(el('p', 'hint', 'Odpovědi slouží jen k nastavení plánu. Neukládají se – uloží se jen výsledek '
-    + '(typ plánu a preference). Kdykoli ho můžeš vyplnit znovu.'));
+  root.append(el('p', 'hint', t('quiz.intro')));
   const answers = {};
   const sets = [];
   const form = el('form', 'quiz');
@@ -47,9 +47,9 @@ export async function renderQuiz(root, { onDone, onCancel } = {}) {
   }
   const msg = el('p', 'hint warn');
   msg.hidden = true;
-  const submit = el('button', 'big', 'Sestavit plán');
+  const submit = el('button', 'big', t('quiz.submit'));
   submit.type = 'submit';
-  const cancel = el('button', null, 'Zpět');
+  const cancel = el('button', null, t('quiz.back'));
   cancel.type = 'button';
   cancel.addEventListener('click', () => onCancel?.());
   form.append(msg, submit, cancel);
@@ -71,7 +71,7 @@ export async function renderQuiz(root, { onDone, onCancel } = {}) {
     e.preventDefault();
     const missing = sets.filter(({ q }) => visible(q) && !(q.id in answers)).length;
     if (missing) {
-      msg.textContent = `Zbývá odpovědět na ${missing} ${missing === 1 ? 'otázku' : missing < 5 ? 'otázky' : 'otázek'}.`;
+      msg.textContent = t('quiz.missing', { n: missing });
       msg.hidden = false;
       return;
     }
@@ -80,7 +80,7 @@ export async function renderQuiz(root, { onDone, onCancel } = {}) {
       const info = await api('POST', '/coach/profile', { answers });
       onDone?.(info);
     } catch (err) {
-      msg.textContent = `Nepodařilo se uložit: ${err.message}`;
+      msg.textContent = t('quiz.saveFailed', { msg: err.message });
       msg.hidden = false;
       submit.disabled = false;
     }

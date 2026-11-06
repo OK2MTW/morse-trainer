@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Běžná anglická slova pro příjem ve skluzu: krátká 2–5 písmen (M7, krok 5–6), dlouhá 6–7 písmen (M8).
-// Seznam sestaven ručně pro tento projekt (není převzat z cizího seznamu). Jen písmena A–Z.
-// Radioamatérské zkratky a Q-kódy jsou zvlášť v abbr.js (M8).
+// Common English words for copy behind: short 2–5 letters (M7, steps 5–6), long 6–7 letters (M8).
+// The list was compiled by hand for this project (not taken from a third-party list). Letters A–Z only.
+// Amateur radio abbreviations and Q codes are separately in abbr.js (M8).
 export const WORDS = `
 AN AS AT BE BY DO GO HE IF IN IS IT ME MY NO OF ON OR SO TO UP US WE
 ACT ADD AGE AGO AIR ALL AND ANY ARE ARM ART ASK BAD BAG BED BIG BIT BOX BOY BUS BUT BUY CAN CAR CAT CUP CUT
@@ -23,7 +23,7 @@ START STATE STILL STORY STUDY TABLE THEIR THERE THESE THING THINK THOSE THREE TO
 WHERE WHICH WHILE WHITE WHOLE WORLD WOULD WRITE YOUNG
 `.trim().split(/\s+/).filter((w) => w.length >= 2 && w.length <= 5);
 
-// M8 (U4, krok 9 a směs): běžná anglická slova 6–7 písmen – skluz celého slova. Sestaveno ručně pro projekt.
+// M8 (U4, step 9 and the mix): common English words of 6–7 letters – whole-word lag. Compiled by hand for the project.
 export const WORDS_LONG = `
 ACTION ACROSS ALMOST ALWAYS AMOUNT ANSWER ANYONE AROUND ARRIVE BECAME BECOME BEFORE BEHIND BETTER BEYOND
 BRIDGE BRIGHT BROKEN CALLED CENTER CHANGE CHOICE CIRCLE CLOSED COLUMN COMING COMMON CORNER COUNTY COURSE

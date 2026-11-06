@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Dotyková klávesnice s pevným rozložením celé sady (51 znaků).
-// Nenaučené znaky jsou ztlumené a neaktivní, ale zůstávají na svém místě (paměť prstů).
+// Touch keyboard with a fixed layout of the whole set (51 characters).
+// Characters not learned yet are dimmed and inactive, but stay in their place (finger memory).
 import { KEYBOARD_ROWS, PROSIGN_ALIAS } from './charset.js';
+import { t } from './i18n.js';
+
+// keyboard mode = lesson mode (stored values, see storage.js MODE_CHAR / MODE_COPY)
+const MODE_CHAR = 'znak';
+const MODE_COPY = 'skluz';
 
 export class TouchKeyboard {
   /**
@@ -14,7 +19,7 @@ export class TouchKeyboard {
     this.onChar = onChar;
     this.actions = actions;
     this.keys = new Map();
-    this.mode = 'znak';
+    this.mode = MODE_CHAR;
     this._render();
   }
 
@@ -30,16 +35,16 @@ export class TouchKeyboard {
         b.className = 'key';
         if (ch === 'REPEAT') {
           b.classList.add('key-wide', 'key-action');
-          b.textContent = '↻ znovu';
+          b.textContent = t('keyboard.repeat');
           this.repeatKey = b;
           b.addEventListener('pointerdown', (e) => {
             e.preventDefault();
-            if (this.mode === 'skluz') { this.flashEl(b); this.actions.onSpace?.(e.timeStamp); } else this.actions.onRepeat?.();
+            if (this.mode === MODE_COPY) { this.flashEl(b); this.actions.onSpace?.(e.timeStamp); } else this.actions.onRepeat?.();
           });
         } else if (ch === 'PAUSE') {
           b.classList.add('key-action');
           b.textContent = '⏸';
-          b.setAttribute('aria-label', 'Pauza');
+          b.setAttribute('aria-label', t('pause.title'));
           b.addEventListener('pointerdown', (e) => { e.preventDefault(); this.actions.onPause?.(); });
         } else {
           b.dataset.char = ch;
@@ -49,7 +54,7 @@ export class TouchKeyboard {
             s.textContent = PROSIGN_ALIAS[ch];
             b.append(s);
           }
-          // pointerdown místo click: žádné zpoždění, přesný timeStamp pro měření reakce
+          // pointerdown instead of click: no delay, an exact timeStamp for measuring the reaction
           b.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             if (b.disabled) return;
@@ -65,7 +70,7 @@ export class TouchKeyboard {
     }
   }
 
-  /** Povolí jen zadané znaky (aktuální Kochova sada). */
+  /** Enables only the given characters (the current Koch set). */
   setActive(chars) {
     const set = new Set(chars);
     for (const [ch, b] of this.keys) {
@@ -73,10 +78,10 @@ export class TouchKeyboard {
     }
   }
 
-  /** M7: 'skluz' = klávesa „↻ znovu“ píše mezeru (oddělovač slov), 'znak' = opakování znaku. */
+  /** M7: copy mode = the "↻ again" key types a space (word separator), character mode = repeat the character. */
   setMode(mode) {
     this.mode = mode;
-    if (this.repeatKey) this.repeatKey.textContent = mode === 'skluz' ? '␣ mezera' : '↻ znovu';
+    if (this.repeatKey) this.repeatKey.textContent = mode === MODE_COPY ? t('keyboard.space') : t('keyboard.repeat');
   }
 
   flash(ch, cls = 'pressed', ms = 180) {

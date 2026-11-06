@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Testy trenéra nad lekcemi (Python port coach.js, M4)."""
+"""Tests of the coach over lessons (Python port of coach.js, M4)."""
 import unittest
 
 from tests import coach as C
@@ -46,7 +46,7 @@ M = 60000
 
 class TestLoad(unittest.TestCase):
     NOW = 1_800_000_000_000
-    DAY = NOW - 10 * H  # místní půlnoc
+    DAY = NOW - 10 * H  # local midnight
 
     def les(self, end_min_ago, dur_min):
         return {'at': iso(self.NOW - end_min_ago * M), 'durS': dur_min * 60}
@@ -58,7 +58,7 @@ class TestLoad(unittest.TestCase):
         self.assertIsNone(r['gapH'])
 
     def test_session_chain(self):
-        # 3 bloky po 10 min s krátkými pauzami → 30 min → návrh konce
+        # 3 blocks of 10 min with short breaks → 30 min → suggest stopping
         hist = [self.les(25, 10), self.les(13, 10), self.les(1, 10)]
         r = C.session_load(hist, self.NOW, self.DAY)
         self.assertEqual(r['sessionMin'], 30)
@@ -82,7 +82,7 @@ class TestLoad(unittest.TestCase):
         r = C.session_load(hist, self.NOW, self.DAY)
         self.assertEqual(r['dayMin'], 70)
         self.assertTrue(r['dayWarn'])
-        # včerejší lekce se nepočítají
+        # yesterday's lessons do not count
         r = C.session_load([self.les(11 * 60, 10)], self.NOW, self.DAY)
         self.assertEqual(r['dayMin'], 0)
 
@@ -99,7 +99,7 @@ class TestLoad(unittest.TestCase):
 
 
 class TestFatigueMonitor(unittest.TestCase):
-    """Simulace lekce: pokus každé 2 s, TTR a úspěšnost podle scénáře."""
+    """Lesson simulation: a trial every 2 s, TTR and accuracy by scenario."""
 
     def run_sim(self, phases, base=None, snooze_at=None):
         import random
@@ -133,7 +133,7 @@ class TestFatigueMonitor(unittest.TestCase):
         self.assertIsNone(first)
 
     def test_acc_drop_within_band_ignored(self):
-        # regulace obtížnosti smí úspěšnost posunout k 82 % – to není únava
+        # difficulty control may move accuracy to 82 % – that is not fatigue
         first, _ = self.run_sim([(120, 0.95, 500), (400, 0.83, 500)])
         self.assertIsNone(first)
 
@@ -147,7 +147,7 @@ class TestFatigueMonitor(unittest.TestCase):
         first, m = self.run_sim([(300, 0.9, 700)], base=base)
         self.assertIs(m.base, base)
         self.assertIsNotNone(first)
-        self.assertLess(first[0], 150)  # bez sbírání základu: okno 20 pokusů (40 s) + 60 s
+        self.assertLess(first[0], 150)  # without collecting a baseline: a window of 20 trials (40 s) + 60 s
 
     def test_warmup_not_counted(self):
         m = C.FatigueMonitor()
@@ -171,7 +171,7 @@ class TestFatigueMonitor(unittest.TestCase):
 
 
 class TestFatigueRelative(unittest.TestCase):
-    """0.8.4 (validace #1): únava proti reakci na stejný znak, nový znak se nepočítá."""
+    """0.8.4 (validation #1): fatigue against the reaction to the same character, the new character does not count."""
     OLD = list('KMURESNAPTLWIJZ.')
     REF = {c: 1100 for c in OLD}
 
@@ -194,7 +194,7 @@ class TestFatigueRelative(unittest.TestCase):
         return first, m
 
     def test_mix_shift_is_not_fatigue(self):
-        # začátek: nový znak 45 % (rychlý), později 15 % → prosté TTR vyroste, reakce na znaky ne
+        # start: new character 45 % (fast), later 15 % → plain TTR grows, the reaction per character does not
         self.assertIsNotNone(self.sim([(80, 0.45, 1), (340, 0.15, 1)], None)[0])
         first, m = self.sim([(80, 0.45, 1), (340, 0.15, 1)], self.REF)
         self.assertIsNone(first)

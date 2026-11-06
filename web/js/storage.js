@@ -1,25 +1,29 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Data uživatele: hlavní kopie na serveru (SQLite), v prohlížeči offline cache + fronta neodeslaných změn.
-// Lekce se ukládají vždy nejdřív lokálně a odešlou se, až je server dostupný (mají UUID → odeslání je idempotentní).
+// User data: the master copy is on the server (SQLite), the browser keeps an offline cache + a queue of unsent changes.
+// Lessons are always stored locally first and sent once the server is reachable (they have a UUID → sending is idempotent).
 import { api } from './api.js';
 import { MIN_WPM } from './drill.js';
 import { BLOCK_MAX_MIN } from './coach.js';
+import { flushTrace } from './trace.js';
 
-const KEY_USER = 'morse-user';            // naposledy přihlášený uživatel (kvůli offline startu)
-const KEY_DEVICE = 'morse-device';         // nastavení jen pro toto zařízení (hlasitost)
+const KEY_USER = 'morse-user';            // last logged-in user (for an offline start)
+const KEY_DEVICE = 'morse-device';         // settings of this device only (volume)
 const cacheKey = (uid) => `morse-cache-${uid}`;
-const LEGACY = ['morse-settings', 'morse-progress', 'morse-m0-settings']; // M0/M1 bez účtu
+const LEGACY = ['morse-settings', 'morse-progress', 'morse-m0-settings']; // M0/M1 without an account
 
-export const DEFAULT_SETTINGS = { wpm: 20, fwpm: 15, freq: 600, volume: 0.7, lessonMin: 5, autoSpeed: 1 };
+export const DEFAULT_SETTINGS = { wpm: 20, fwpm: 15, freq: 600, volume: 0.7, lessonMin: 5, autoSpeed: 1, lang: null };
 export const DEFAULT_PROGRESS = { level: 2, introduced: [], history: [] };
-const SYNCED_SETTINGS = ['wpm', 'fwpm', 'freq', 'lessonMin', 'autoSpeed'];
+const SYNCED_SETTINGS = ['wpm', 'fwpm', 'freq', 'lessonMin', 'autoSpeed', 'lang']; // I18N: language follows the account
+// Lesson mode – stored value (lessons, traces): 'znak' = character by character with an answer, 'skluz' = copy behind.
+export const MODE_CHAR = 'znak';
+export const MODE_COPY = 'skluz';
 const HISTORY_MAX = 500;
 
-/** Tvrdá mez rychlosti znaku (R1): starší uložené nastavení pod 12 WPM se zvedne. */
+/** Hard limit of the character speed (R1): older stored settings below 12 WPM are raised. */
 function clampSettings() {
   if (!(settings.wpm >= MIN_WPM)) settings.wpm = Math.max(MIN_WPM, Number(settings.wpm) || DEFAULT_SETTINGS.wpm);
   if (settings.fwpm > settings.wpm) settings.fwpm = settings.wpm;
-  if (settings.lessonMin > BLOCK_MAX_MIN) settings.lessonMin = BLOCK_MAX_MIN; // blok 5–10 min (R1)
+  if (settings.lessonMin > BLOCK_MAX_MIN) settings.lessonMin = BLOCK_MAX_MIN; // block of 5–10 min (R1)
 }
 
 function read(key) {
@@ -29,19 +33,19 @@ function write(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch (e) { return false; }
 }
 
-// Sdílené objekty – main.js je mění přímo a pak volá save*().
+// Shared objects – main.js changes them directly and then calls save*().
 export const settings = { ...DEFAULT_SETTINGS };
 export const progress = { ...DEFAULT_PROGRESS, introduced: [], history: [] };
-// Statistika znaků ze serveru (GET /api/stats) – jen čtená cache, počítá ji server z posledních lekcí.
+// Character statistics from the server (GET /api/stats) – read-only cache, computed by the server from recent lessons.
 export const stats = { lessons: 0, chars: {}, at: null };
-// Trenér ze serveru (GET /api/coach, M4): archetyp, modifikátory, preference, plán, úroveň U1–U6, plato.
+// Coach from the server (GET /api/coach, M4): archetype, modifiers, preferences, plan, level U1–U6, plateau.
 export const coachInfo = { data: null };
 export const sync = { canTrain: true, epoch: null, uid: null, dirtySettings: false, dirtyProgress: false, outbox: [], lastSync: null, error: null };
 let listeners = [];
 export function onDataChange(fn) { listeners.push(fn); }
 const notify = () => listeners.forEach((fn) => fn());
 
-/** Nový výsledek dotazníku (nebo plánu) ze serveru → cache. */
+/** New questionnaire (or plan) result from the server → cache. */
 export function setCoachInfo(d) { coachInfo.data = d; persist(); notify(); }
 
 export const cachedUser = () => read(KEY_USER);
@@ -57,7 +61,7 @@ function persist() {
   });
 }
 
-/** Načte cache uživatele (bez sítě). */
+/** Loads the user's cache (without network). */
 export function openUser(uid) {
   sync.uid = uid;
   const c = read(cacheKey(uid)) || {};
@@ -78,13 +82,13 @@ export function openUser(uid) {
   coachInfo.data = c.coach && typeof c.coach === 'object' ? c.coach : null;
 }
 
-/** Výcvik byl resetován (zde nebo na jiném zařízení) – zahodit lokální pokrok, historii i neodeslané lekce. */
 function setStats(st) {
   stats.lessons = st?.lessons || 0;
   stats.chars = st?.chars && typeof st.chars === 'object' ? st.chars : {};
   stats.at = st?.at || null;
 }
 
+/** Training was reset (here or on another device) – drop local progress, history and unsent lessons. */
 function wipeTraining() {
   setStats(null);
   progress.level = DEFAULT_PROGRESS.level;
@@ -94,7 +98,7 @@ function wipeTraining() {
   sync.dirtyProgress = false;
 }
 
-/** Reset vlastního výcviku (potvrzeno heslem). Nastavení zůstává. */
+/** Reset of one's own training (confirmed by password). Settings stay. */
 export async function resetTraining(password) {
   const { epoch } = await api('POST', '/training/reset', { password });
   wipeTraining();
@@ -103,9 +107,9 @@ export async function resetTraining(password) {
   notify();
 }
 
-/** Odhlášení: smaže data uživatele z tohoto zařízení (sdílený počítač). */
+/** Logout: deletes the user's data from this device (shared computer). */
 export function forgetUser() {
-  if (sync.uid != null) localStorage.removeItem(cacheKey(sync.uid));
+  if (sync.uid != null) { localStorage.removeItem(cacheKey(sync.uid)); localStorage.removeItem(`morse-trace-q-${sync.uid}`); }
   localStorage.removeItem(KEY_USER);
   sync.uid = null;
   sync.outbox = [];
@@ -128,10 +132,10 @@ export function saveProgress() {
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
   : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''));
 
-/** Uloží výsledek lekce (lokálně ihned, na server při nejbližší synchronizaci). */
+/** Stores a lesson result (locally at once, on the server with the next sync). */
 export function addLesson(entry) {
   const h = { id: uuid(), ...entry };
-  const { detail, ...compact } = h; // detail po znacích jen na server, lokální historie zůstane malá
+  const { detail, ...compact } = h; // per-character detail only goes to the server, the local history stays small
   progress.history.push(compact);
   if (progress.history.length > HISTORY_MAX) progress.history = progress.history.slice(-HISTORY_MAX);
   sync.outbox.push(h);
@@ -139,7 +143,7 @@ export function addLesson(entry) {
   return h;
 }
 
-/** Data z M1 (bez účtu) v tomto prohlížeči – sloučí se do účtu, který se tu přihlásí jako první. */
+/** M1 data (without an account) in this browser – merged into the first account that logs in here. */
 function legacyData() {
   const p = read('morse-progress');
   if (!p || (!(p.history?.length) && !(p.level > 2))) return null;
@@ -153,7 +157,7 @@ function scheduleSync(ms = 1500) {
   syncTimer = setTimeout(() => { syncNow().catch(() => {}); }, ms);
 }
 
-/** Odešle změny a stáhne aktuální stav ze serveru. Vrací info o převodu M1 dat (nebo null). */
+/** Sends changes and fetches the current state from the server. Returns info about an M1 data import (or null). */
 export function syncNow() {
   if (!syncing) syncing = doSync().finally(() => { syncing = null; });
   return syncing;
@@ -163,17 +167,19 @@ async function doSync() {
   if (sync.uid == null) return null;
   const uid = sync.uid;
   try {
-    // 1) odeslat (po dávkách max. 200 lekcí)
+    // 1) send (in batches of at most 200 lessons)
     while (sync.outbox.length) {
       const batch = sync.outbox.slice(0, 200);
       const { saved } = await api('POST', '/lessons', { lessons: batch, epoch: sync.epoch });
       const ok = new Set(saved);
-      // i odmítnuté (neplatné) lekce z fronty vyřadíme, jinak by se posílaly donekonečna
+      // rejected (invalid) lessons are removed from the queue too, otherwise they would be sent forever
       const sent = new Set(batch.map((x) => x.id));
       sync.outbox = sync.outbox.filter((x) => !sent.has(x.id));
-      if (ok.size !== sent.size) console.warn('Server odmítl některé lekce');
+      if (ok.size !== sent.size) console.warn('Server rejected some lessons');
     }
-    // příznak shodíme před odesláním (změna během čekání ho znovu nastaví), při chybě vrátíme
+    // V1: debug trace of lessons (only for enabled accounts) – its error must not stop the sync
+    try { await flushTrace(); } catch (e) { if (e.auth) throw e; }
+    // the flag is cleared before sending (a change while waiting sets it again), restored on error
     if (sync.dirtySettings) {
       sync.dirtySettings = false;
       try {
@@ -186,10 +192,10 @@ async function doSync() {
         await api('PUT', '/progress', { level: progress.level, introduced: progress.introduced, epoch: sync.epoch });
       } catch (e) { sync.dirtyProgress = true; throw e; }
     }
-    // 2) stáhnout
+    // 2) fetch
     const d = await api('GET', '/data');
-    if (sync.uid !== uid) return null; // mezitím odhlášen
-    if (sync.epoch !== null && d.epoch !== sync.epoch) wipeTraining(); // reset z jiného zařízení
+    if (sync.uid !== uid) return null; // logged out meanwhile
+    if (sync.epoch !== null && d.epoch !== sync.epoch) wipeTraining(); // reset from another device
     sync.epoch = d.epoch;
     const legacy = legacyData();
     if (legacy && sync.canTrain) return await importLegacy(legacy, d);
@@ -206,11 +212,11 @@ async function doSync() {
       try {
         const st = await api('GET', '/stats');
         if (sync.uid === uid) setStats({ ...st, at: new Date().toISOString() });
-      } catch (e) { /* statistika není nutná, zůstane stará cache */ }
+      } catch (e) { /* statistics are optional, the old cache stays */ }
       try {
         const co = await api('GET', '/coach');
         if (sync.uid === uid) {
-          // M6: změnu tempa server už zapsal do nastavení – převzít ji (ruční změna čekající na odeslání má přednost)
+          // M6: the server already wrote the pace change into the settings – take it over (a pending manual change wins)
           const ch = co.speed?.change;
           if (ch?.applied && !sync.dirtySettings) {
             settings.wpm = ch.to.wpm;
@@ -222,17 +228,17 @@ async function doSync() {
           }
           coachInfo.data = co;
         }
-      } catch (e) { /* plán není nutný, zůstane stará cache */ }
+      } catch (e) { /* the plan is optional, the old cache stays */ }
     }
     sync.lastSync = new Date().toISOString();
     sync.error = null;
   } catch (e) {
-    if (e.status === 409) { // výcvik resetován jinde → zahodit staré a stáhnout znovu
+    if (e.status === 409) { // training reset elsewhere → drop the old data and fetch again
       wipeTraining();
       sync.epoch = null;
       return doSync();
     }
-    // při chybě se změny pošlou příště znovu
+    // on error the changes are sent again next time
     sync.error = e.message;
     persist();
     throw e;
@@ -243,7 +249,7 @@ async function doSync() {
 }
 
 async function importLegacy(legacy, server) {
-  // nastavení jen pokud účet ještě žádné nemá; pokrok = vyšší úroveň, sjednocené znaky, lekce se přidají
+  // settings only if the account has none yet; progress = higher level, union of characters, lessons are added
   if (!server.settings) {
     for (const k of SYNCED_SETTINGS) if (typeof legacy.settings[k] === 'number') settings[k] = legacy.settings[k];
     if (typeof legacy.settings.volume === 'number') settings.volume = legacy.settings.volume;

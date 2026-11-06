@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Adresy konkrétní instalace (E3) – nejsou v kódu, čtou se z /etc/morse-trainer/site.env (vzor deploy/site.env.example).
+"""Addresses of a particular installation (E3) – not in the code, read from /etc/morse-trainer/site.env (template
+deploy/site.env.example).
 
-Proměnné prostředí mají přednost (testy, vývoj). Soubor není tajný (jen adresy), tajné údaje patří jinam.
+Environment variables take precedence (tests, development). The file is not secret (addresses only), secrets belong elsewhere.
 """
 import os
 from urllib.parse import urlsplit
@@ -35,6 +36,6 @@ def _url(name):
     return u if not u or u.endswith("/") else u + "/"
 
 
-HOME_URL = _url("MORSE_HOME_URL")      # např. https://192.168.x.y/
-PUBLIC_URL = _url("MORSE_PUBLIC_URL")  # např. https://<subdomena>.a.pinggy.link/ (prázdné = jen domácí síť)
+HOME_URL = _url("MORSE_HOME_URL")      # e.g. https://192.168.x.y/
+PUBLIC_URL = _url("MORSE_PUBLIC_URL")  # e.g. https://<subdomain>.a.pinggy.link/ (empty = home network only)
 PUBLIC_HOSTS = tuple(h for h in (urlsplit(PUBLIC_URL).hostname,) if h)

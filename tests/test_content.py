@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Testy obsahu lekce ve skluzu (Python port content.js, M7 + M8): jen zvládnuté znaky, délky, slova, zkratky, volací znaky."""
+"""Tests of copy-behind content (Python port of content.js, M7 + M8): only mastered characters, lengths, words, abbreviations, call signs."""
 import random
 import re
 import unittest
@@ -36,7 +36,7 @@ class TestWords(unittest.TestCase):
         self.assertFalse(set(T.WORDS_LONG) & set(T.WORDS))
         self.assertGreaterEqual(len(T.ABBR), 60)
         self.assertEqual(len(T.ABBR), len(set(T.ABBR)), [w for w in T.ABBR if T.ABBR.count(w) > 1])
-        for w in T.ABBR:  # jen znaková sada projektu
+        for w in T.ABBR:  # only the project's character set
             self.assertTrue(set(w) <= set(ALL), w)
 
 
@@ -62,9 +62,9 @@ class TestGenerators(unittest.TestCase):
     def test_pseudo(self):
         items = [T.pseudo(ALL, self.rng) for _ in range(2000)]
         self.assertTrue(all(T.PSEUDO_MIN <= len(x) <= T.PSEUDO_MAX and x.isalpha() for x in items))
-        # bez samohlásek nespadne
+        # does not crash without vowels
         self.assertTrue(T.pseudo(list('KMRS'), self.rng))
-        # bez písmen → skupina z ostatních znaků
+        # without letters → a group of the other characters
         self.assertTrue(set(T.pseudo(list('5/9'), self.rng)) <= set('5/9'))
 
     def test_words_full_set(self):
@@ -73,7 +73,7 @@ class TestGenerators(unittest.TestCase):
         self.assertTrue(all(a != b for a, b in zip(items, items[1:])))
 
     def test_words_few_letters_mix_pseudo(self):
-        few = list('KMURESN')  # málo písmen → málo slov
+        few = list('KMURESN')  # few letters → few words
         av = T.words_for(few)
         self.assertLess(len(av), T.WORDS_MIN)
         items = T.make_items('words', few, 300, self.rng)
@@ -94,7 +94,7 @@ class TestU4Content(unittest.TestCase):
             self.assertNotEqual(x[0], 'Q')
         slash = sum('/' in x for x in items) / len(items)
         self.assertAlmostEqual(slash, T.CALL_SLASH, delta=0.03)
-        self.assertGreater(len(set(items)), 2500)  # generované, ne ze seznamu
+        self.assertGreater(len(set(items)), 2500)  # generated, not from a list
 
     def test_calls_without_digits_or_slash(self):
         no_dig = [c for c in ALL if c not in T.DIGITS]
@@ -107,7 +107,7 @@ class TestU4Content(unittest.TestCase):
         self.assertTrue(all(x in T.ABBR for x in a))
         lw = T.make_items('long', ALL, 300, self.rng)
         self.assertTrue(all(x in T.WORDS_LONG for x in lw))
-        # málo písmen → doplní se kratšími slovy / pseudoslovy, ale vždy jen ze zvládnutých znaků
+        # few letters → filled up with shorter words / pseudo-words, but always only from mastered characters
         few = list('KMURESNAPTLWIO')
         for x in T.make_items('long', few, 200, self.rng) + T.make_items('abbr', few, 200, self.rng):
             self.assertTrue(set(x) <= set(few), x)

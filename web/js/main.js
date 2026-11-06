@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Lekce Kochovou metodou (M1) + účty a synchronizace (M2) + statistika a rozlišování (M3) + trenér: plán, zátěž, úrovně (M4)
-// + únava v lekci, rozcvička po pauze, dashboard pokroku (M5).
+// Koch-method lessons (M1) + accounts and sync (M2) + statistics and discrimination (M3) + coach: plan, load, levels (M4)
+// + fatigue in a lesson, warm-up after a break, progress dashboard (M5).
+import { t, fmtNum, fmtDate, setLang, lang, LANGUAGES } from './i18n.js';
 import { isPublic, otherSite } from './site.js';
+import { traceBegin, traceEnd, tr, traceAudio, audioMeta } from './trace.js';
 import { MorsePlayer } from './audio.js';
 import { TouchKeyboard } from './keyboard.js';
 import { normalizeKey, KOCH_ORDER } from './charset.js';
@@ -11,6 +13,7 @@ import {
 } from './drill.js';
 import {
   settings, progress, sync, stats, coachInfo, setCoachInfo, saveSettings, saveProgress, addLesson, onDataChange,
+  MODE_CHAR, MODE_COPY,
 } from './storage.js';
 import { renderQuiz } from './quiz.js';
 import { renderPlan } from './plan.js';
@@ -21,32 +24,32 @@ import {
   FatigueMonitor, fatigueRef, REWARM_PAUSE_MIN, REWARM_S, SESSION_BREAK_MIN,
 } from './coach.js';
 import { startAuth, renderAccount, backgroundSync, session } from './account.js';
-import { deviceKind } from './api.js';
+import { deviceKind, DEVICE_MOBILE } from './api.js';
 import { initCopy } from './copylesson.js';
 import * as WPM from '../vendor/morse-pro/morse-pro-wpm.js';
 
 const $ = (s) => document.querySelector(s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const ANSWER_TIMEOUT = 6000; // ms po konci znaku → „nevím“
-// 0.5.1: opravné přehrání nejdřív FIX_AFTER_PRESS po odpovědi A ZÁROVEŇ FIX_AFTER_TONE po doznění
-// původního znaku (odpověď lze zadat ještě během znaku – dřív se oprava „srazila“ s originálem).
+const ANSWER_TIMEOUT = 6000; // ms after the end of the character → "don't know"
+// 0.5.1: the correction is played at the earliest FIX_AFTER_PRESS after the answer AND FIX_AFTER_TONE after the
+// original character has finished (the answer may come while the character still plays – the correction used to clash with it).
 const FIX_AFTER_PRESS = 600;
 const FIX_AFTER_TONE = 700;
 const untilTone = (toneEnd) => Math.max(0, toneEnd - performance.now());
 const fixDelay = (toneEnd) => Math.max(FIX_AFTER_PRESS, untilTone(toneEnd) + FIX_AFTER_TONE);
-// Odstup prvního znaku po pauze v lekci (s ≥ 5 s pauzy se navíc zahřívá zvuk)
-const RESUME_SHORT_MS = 600;   // pauza < 5 s
-const RESUME_MS = 1500;        // pauza < REWARM_PAUSE_MIN
-const RESUME_LONG_MS = 2500;   // dlouhá pauza – Android mezitím uspí zvukový výstup
+// Delay of the first character after a pause in a lesson (with a pause ≥ 5 s the audio is also warmed up)
+const RESUME_SHORT_MS = 600;   // pause < 5 s
+const RESUME_MS = 1500;        // pause < REWARM_PAUSE_MIN
+const RESUME_LONG_MS = 2500;   // long pause – Android puts the audio output to sleep meanwhile
 
 const player = new MorsePlayer();
-player.settings = settings; // sdílený objekt (wpm, fwpm, freq, volume)
+player.settings = settings; // shared object (wpm, fwpm, freq, volume)
 
-// ================= navigace =================
+// ================= navigation =================
 let view = 'home';
 const PUBLIC_VIEWS = ['login', 'register', 'reset'];
 const TRAINING_VIEWS = ['home', 'intro', 'discrim', 'lesson', 'result', 'stats', 'quiz', 'copy', 'copyresult'];
-// 0.8.6: menu uživatele (ikona vpravo nahoře)
+// 0.8.6: user menu (icon top right)
 function closeUserMenu() {
   $('#user-menu').hidden = true;
   $('#user-btn').setAttribute('aria-expanded', 'false');
@@ -63,8 +66,8 @@ $('#menu-logout').addEventListener('click', () => { closeUserMenu(); $('#acc-log
 
 function show(name) {
   if (!session.user && !PUBLIC_VIEWS.includes(name)) name = 'login';
-  if (session.user?.pw_change) name = 'pwchange'; // E3: nejdřív nové heslo
-  const admin = session.user?.role === 'admin'; // správce jen spravuje, netrénuje
+  if (session.user?.pw_change) name = 'pwchange'; // E3: new password first
+  const admin = session.user?.role === 'admin'; // the administrator only manages, does not train
   if (admin && TRAINING_VIEWS.includes(name)) name = 'account';
   $('.tabs [data-go="home"]').hidden = admin;
   for (const el of document.querySelectorAll('.training-only')) el.hidden = admin;
@@ -72,7 +75,7 @@ function show(name) {
   for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== `view-${name}`;
   const training = name === 'lesson' || name === 'intro' || name === 'discrim' || name === 'copy';
   $('#keyboard').hidden = name !== 'lesson' && name !== 'discrim' && name !== 'copy';
-  player.keepAlive(training && document.visibilityState === 'visible'); // 0.8.5: BT výstup nesmí usnout
+  player.keepAlive(training && document.visibilityState === 'visible'); // 0.8.5: BT output must not fall asleep
   $('.tabs').hidden = training || !session.user || name === 'pwchange';
   $('#user-btn').hidden = name === 'pwchange';
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.go === name);
@@ -103,8 +106,8 @@ async function keepAwake(on) {
   } catch (e) { wakeLock = null; }
 }
 
-// ================= klávesnice a vstup =================
-let inputHandler = null; // (ch, ts) => void – kdo právě čeká na odpověď
+// ================= keyboard and input =================
+let inputHandler = null; // (ch, ts) => void – whoever is waiting for an answer right now
 const kbd = new TouchKeyboard($('#keyboard'), (ch, ts) => (view === 'copy' ? copyCtl.onChar(ch, ts) : inputHandler?.(ch, ts)), {
   onRepeat: () => repeatHandler?.(),
   onPause: () => (view === 'copy' ? copyCtl.pause() : pauseHandler?.()),
@@ -124,16 +127,17 @@ document.addEventListener('keydown', (e) => {
   if (ch) { e.preventDefault(); kbd.flash(ch); inputHandler?.(ch, e.timeStamp); }
 });
 
-// ================= DOMŮ =================
+// ================= HOME =================
 function localMidnight() { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
 function currentLoad() { return sessionLoad(progress.history, Date.now(), localMidnight()); }
-const fmtMin = (m) => String(Math.round(m)).replace('.', ',');
+const fmtMin = (m) => fmtNum(Math.round(m));
+const pct = (x) => `${Math.round(x * 100)} %`;
 
 function newestChar() { return charsForLevel(progress.level).at(-1); }
 
 function renderHome() {
   const chars = charsForLevel(progress.level);
-  $('#level-count').textContent = `(${chars.length} z ${KOCH_ORDER.length})`;
+  $('#level-count').textContent = t('home.levelCount', { n: chars.length, of: KOCH_ORDER.length });
   const box = $('#level-chars');
   box.textContent = '';
   for (const c of chars) {
@@ -144,29 +148,32 @@ function renderHome() {
   }
   const next = KOCH_ORDER[chars.length];
   $('#level-next').textContent = next
-    ? `Další znak: „${next}“ – přidá se, až budeš mít ${Math.round(ADVANCE_ACCURACY * 100)} % v posledních ${ADVANCE_WINDOW} znacích lekce a nejnovější znak poznáš spolehlivě a rychle. Od 5. znaku se postup potvrzuje v dalším sezení (aspoň 3 h).`
-    : 'Máš všechny znaky sady!';
-  $('#lesson-info').textContent = `${settings.lessonMin} min · znak ${settings.wpm} WPM · mezery ${settings.fwpm} WPM · tón ${settings.freq} Hz`;
-  // M6: změna tempa trenérem (zůstane vidět do další lekce)
+    ? t('home.nextChar', { ch: next, acc: Math.round(ADVANCE_ACCURACY * 100), n: ADVANCE_WINDOW })
+    : t('home.allChars');
+  $('#lesson-info').textContent = t('home.lessonInfo', { min: settings.lessonMin, wpm: settings.wpm, fwpm: settings.fwpm, freq: settings.freq });
+  // M6: pace change by the coach (stays visible until the next lesson)
   const sn = coachInfo.data?.speedNotice;
   const sp = coachInfo.data?.speed;
   const snEl = $('#speed-note');
   snEl.hidden = !sn && !(sp?.change && !sp.change.applied);
   if (sn) snEl.textContent = `${sn.text} ${sn.why}`;
-  else if (sp?.change && !sp.change.applied) snEl.textContent = `Trenér navrhuje tempo ${sp.change.to.wpm}/${sp.change.to.fwpm} WPM. ${sp.change.why} (Změníš v Nastavení.)`;
+  else if (sp?.change && !sp.change.applied) {
+    snEl.textContent = t('home.speedProposal', { wpm: sp.change.to.wpm, fwpm: sp.change.to.fwpm, why: sp.change.why });
+  }
   const ld = currentLoad();
   const li = $('#load-info');
   li.hidden = ld.dayMin === 0;
   li.className = ld.suggestEnd || ld.dayWarn ? 'hint center warn' : 'hint center';
   li.textContent = ld.dayWarn
-    ? `Dnes už ${fmtMin(ld.dayMin)} min. Nad ${DAY_WARN_MIN} min denně se už moc nepřidá – lepší je pokračovat zítra.`
+    ? t('home.loadDayWarn', { min: fmtMin(ld.dayMin), max: DAY_WARN_MIN })
     : ld.suggestEnd
-      ? `Toto sezení trvá ${fmtMin(ld.sessionMin)} min. Doporučuji skončit a pokračovat po delší pauze.`
-      : `Dnes ${fmtMin(ld.dayMin)} min${ld.newSession ? '' : ` · toto sezení ${fmtMin(ld.sessionMin)} min`}.`;
+      ? t('home.loadSessionEnd', { min: fmtMin(ld.sessionMin) })
+      : (ld.newSession ? t('home.loadToday', { min: fmtMin(ld.dayMin) })
+        : t('home.loadTodaySession', { min: fmtMin(ld.dayMin), session: fmtMin(ld.sessionMin) }));
   if (!ld.newSession && lastFatigueAt && Date.now() - lastFatigueAt < SESSION_BREAK_MIN * 60000) {
     li.hidden = false;
     li.className = 'hint center warn';
-    li.textContent += ` Minulá lekce ukázala únavu – dej si pauzu aspoň ${SESSION_BREAK_MIN} min, další sezení pak začne rozcvičkou.`;
+    li.textContent += ` ${t('home.loadFatigue', { min: SESSION_BREAK_MIN })}`;
   }
 
   renderPlan($('#plan-root'), coachInfo.data, { onQuiz: () => show('quiz') });
@@ -177,16 +184,17 @@ function renderHome() {
   const last = progress.history.slice(-10).reverse();
   $('#history-empty').hidden = last.length > 0;
   for (const h of last) {
-    const tr = document.createElement('tr');
-    const d = new Date(h.at).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
-    for (const txt of [d, h.mode === 'skluz' ? 'skluz' : `${h.level} zn.`, `${Math.round(h.acc * 100)} %`, h.ttr ? `${h.ttr} ms` : '–']) {
-      const td = document.createElement('td'); td.textContent = txt; tr.append(td);
+    const row = document.createElement('tr');
+    const d = fmtDate(h.at, { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const what = h.mode === MODE_COPY ? t('home.histCopy') : t('home.histChars', { n: h.level });
+    for (const txt of [d, what, pct(h.acc), h.ttr ? `${h.ttr} ms` : '–']) {
+      const td = document.createElement('td'); td.textContent = txt; row.append(td);
     }
-    tb.append(tr);
+    tb.append(row);
   }
 }
 
-// ================= PŘÍJEM VE SKLUZU (M7) =================
+// ================= COPY BEHIND (M7) =================
 const copyCtl = initCopy({
   player, kbd, show, settings, progress, coachInfo, addLesson, ensureAudio, keepAwake, deviceKind, currentLoad,
   fallbackChars: () => charsForLevel(progress.level),
@@ -198,20 +206,19 @@ function renderCopyCard() {
   const cp = coachInfo.data?.copy;
   $('#copy-card').hidden = !cp?.available;
   if (!cp?.available) return;
-  $('#copy-step').textContent = `(U${cp.ulevel || 3} · krok ${cp.step} z ${cp.of})`;
-  $('#copy-desc').textContent = `Znaky běží proudem bez čekání – piš průběžně, klidně o znak či celé slovo později. `
-    + `Teď: ${cp.name}, ${cp.gap}, ${cp.wpm ? `${cp.wpm}/${cp.wpm}` : `${settings.wpm}/${settings.fwpm}`} WPM. `
-    + 'Hodnotí se zarovnáním celého řádku, oprava přijde na jeho konci.'
-    + (cp.markLag > 1 ? ' Cíl kroku: skluz celého slova – piš slovo, zatímco zní další; značka ✓/✗ přijde o 2 slova později.' : '')
-    + (deviceKind() === 'mobil' ? ' Na mobilu doporučuji psát vždy celé slovo až po jeho doznění.' : '');
+  $('#copy-step').textContent = t('home.copyStep', { ulevel: cp.ulevel || 3, step: cp.step, of: cp.of });
+  const speed = cp.wpm ? `${cp.wpm}/${cp.wpm}` : `${settings.wpm}/${settings.fwpm}`;
+  $('#copy-desc').textContent = t('home.copyDesc', { name: cp.name, gap: cp.gap, speed })
+    + (cp.markLag > 1 ? ` ${t('home.copyWordLag')}` : '')
+    + (deviceKind() === DEVICE_MOBILE ? ` ${t('home.copyMobile')}` : '');
   $('#copy-note').textContent = [cp.change?.text, cp.change?.why, cp.next].filter(Boolean).join(' ');
 }
 
-// ================= DOTAZNÍK (M4) =================
+// ================= QUESTIONNAIRE (M4) =================
 function openQuiz() {
   renderQuiz($('#quiz-root'), {
     onDone: (info) => {
-      // navržené nastavení se použije hned (dá se změnit v Nastavení); meze jako u stepperů
+      // the suggested settings apply right away (can be changed in Settings); limits as with the steppers
       const s = info.prefs?.settings || {};
       if (Number.isFinite(s.lessonMin)) settings.lessonMin = Math.min(10, Math.max(1, s.lessonMin));
       if (Number.isFinite(s.wpm)) settings.wpm = Math.min(40, Math.max(12, s.wpm));
@@ -228,28 +235,37 @@ $('#btn-start').addEventListener('click', startTraining);
 $('#btn-again').addEventListener('click', startTraining);
 
 async function startTraining() {
-  if (!(await ensureAudio())) { alert('Zvuk se nepodařilo zapnout.'); return; }
+  if (!(await ensureAudio())) { alert(t('audio.failed')); return; }
   const chars = charsForLevel(progress.level);
-  kbd.setMode('znak');
+  kbd.setMode(MODE_CHAR);
   kbd.setActive(chars);
   await keepAwake(true);
-  if (coachInfo.data?.speedNotice) setCoachInfo({ ...coachInfo.data, speedNotice: null }); // viděl(a) na Domů
+  if (coachInfo.data?.speedNotice) setCoachInfo({ ...coachInfo.data, speedNotice: null }); // seen on Home
   const fresh = chars.filter((c) => !progress.introduced.includes(c));
-  // rozcvička: první lekce nového sezení začíná 1–2 min jen známými znaky (měření zapamatování, R1)
+  traceAudio(player.ctx);
+  traceBegin(MODE_CHAR, {
+    level: progress.level, chars: chars.join(''), fresh: fresh.join(''), device: deviceKind(),
+    standalone: matchMedia('(display-mode: standalone)').matches, public: isPublic(),
+    set: { wpm: settings.wpm, fwpm: settings.fwpm, freq: settings.freq, vol: settings.volume, min: settings.lessonMin },
+    load: currentLoad(), audio: audioMeta(player), ulevel: coachInfo.data?.ulevel ?? null, ua: navigator.userAgent.slice(0, 200),
+  });
+  // warm-up: the first lesson of a new session starts with 1–2 min of known characters only (retention measure, R1)
   const ld = currentLoad();
   L.warm = ld.newSession && progress.history.length ? { gapH: ld.gapH, n: null, fresh } : null;
-  if (ld.newSession) sessionFat.base = null; // základ únavy patří k sezení
+  if (ld.newSession) sessionFat.base = null; // the fatigue baseline belongs to the session
   L.fresh = fresh;
   if (fresh.length) {
+    tr('intro', fresh.join(''));
     await runIntro(fresh);
+    tr(intro.skip ? 'introSkip' : 'discrim');
     if (!intro.skip) await runDiscrim(fresh, chars);
   }
   kbd.setActive(chars);
   startLesson(chars);
 }
 
-// ================= SEZNÁMENÍ =================
-// Jen poslech: znak se ukáže a 3× zazní. Bez klávesnice – odpovídá se až v lekci.
+// ================= INTRODUCTION =================
+// Listening only: the character is shown and plays 3×. No keyboard – answers come in the lesson.
 const intro = { skip: false, current: null, next: null };
 
 function waitContinue() {
@@ -265,17 +281,17 @@ async function runIntro(list) {
   for (let i = 0; i < list.length && !intro.skip; i++) {
     const c = list[i];
     intro.current = c;
-    $('#intro-label').textContent = list.length > 1 ? `Nový znak ${i + 1}/${list.length}` : 'Nový znak';
+    $('#intro-label').textContent = list.length > 1 ? t('intro.labelOf', { i: i + 1, n: list.length }) : t('intro.label');
     $('#intro-char').textContent = c;
-    $('#intro-status').textContent = 'Poslouchej, jak zní…';
+    $('#intro-status').textContent = t('intro.listen');
     $('#intro-next').hidden = true;
-    await sleep(i === 0 ? 1000 : 300); // před prvním znakem delší pauza – zvuk se po spuštění ustálí
+    await sleep(i === 0 ? 1000 : 300); // longer pause before the first character – audio settles after start
     for (let k = 0; k < 3 && !intro.skip; k++) { await player.play(c).done; await sleep(450); }
     if (!progress.introduced.includes(c)) progress.introduced.push(c);
     saveProgress();
     if (intro.skip) break;
-    $('#intro-status').textContent = 'Zapamatuj si zvuk. Přehrát můžeš znovu.';
-    $('#intro-next').textContent = i + 1 < list.length ? '▶ Další znak' : '▶ Začít lekci';
+    $('#intro-status').textContent = t('intro.remember');
+    $('#intro-next').textContent = i + 1 < list.length ? t('intro.nextChar') : t('home.start');
     $('#intro-next').hidden = false;
     await waitContinue();
   }
@@ -287,16 +303,16 @@ $('#intro-replay').addEventListener('click', () => repeatHandler?.());
 $('#intro-next').addEventListener('click', () => intro.next?.());
 $('#intro-skip').addEventListener('click', () => { intro.skip = true; player.stop(); intro.next?.(); });
 
-// ================= ROZLIŠOVÁNÍ =================
-// Po seznámení: krátké rozlišování nového znaku proti 1–2 zvukově podobným / zaměňovaným znakům.
-// Okamžitá zpětná vazba, výsledky se neukládají (jen rozcvička před lekcí).
+// ================= DISCRIMINATION =================
+// After the introduction: short discrimination of the new character against 1–2 similar-sounding / confused ones.
+// Immediate feedback, results are not stored (just a warm-up before the lesson).
 const DS = { skip: false, current: null, toneEnd: 0, timer: null, resolve: null, arm: null };
 
 function discrimPlan(fresh, chars) {
   const targets = fresh.slice(-2);
   const pool = chars.filter((c) => !targets.includes(c));
   const conf = {};
-  for (const t of targets) for (const [c, n] of Object.entries(confusionsWith(stats.chars, t))) conf[c] = (conf[c] || 0) + n;
+  for (const tg of targets) for (const [c, n] of Object.entries(confusionsWith(stats.chars, tg))) conf[c] = (conf[c] || 0) + n;
   const contrasts = pool.length ? pickContrasts(targets.at(-1), pool, conf, targets.length === 1 ? 2 : 1, chars.length) : [];
   return { targets, contrasts };
 }
@@ -309,9 +325,9 @@ async function runDiscrim(fresh, chars) {
   DS.skip = false;
   show('discrim');
   kbd.setActive(active);
-  $('#ds-label').textContent = `Rozliš: ${active.join('  ')}`;
+  $('#ds-label').textContent = t('discrim.labelChars', { chars: active.join('  ') });
   $('#ds-char').textContent = '';
-  $('#ds-status').textContent = 'Poznáš nový znak mezi podobnými?';
+  $('#ds-status').textContent = t('discrim.question');
   repeatHandler = () => { if (DS.resolve) { DS.toneEnd = player.play(DS.current).toneEnd; DS.arm(); } };
   pauseHandler = () => { DS.skip = true; player.stop(); DS.resolve?.(null); };
   await sleep(1200);
@@ -340,20 +356,20 @@ async function runDiscrim(fresh, chars) {
     if (ans === c) {
       ok++;
       $('#ds-char').className = 'big-char ok';
-      $('#ds-status').textContent = 'Správně';
+      $('#ds-status').textContent = t('lesson.correct');
       await sleep(Math.max(700, untilTone(DS.toneEnd) + charGap()));
     } else {
       $('#ds-char').className = ans ? 'big-char bad' : 'big-char miss';
-      $('#ds-status').textContent = ans ? `Bylo to „${c}“ (ty: „${ans}“)` : `Bylo to „${c}“`;
+      $('#ds-status').textContent = ans ? t('lesson.wasYou', { ch: c, ans }) : t('lesson.was', { ch: c });
       kbd.flash(c, 'hint', 1500);
-      await sleep(fixDelay(DS.toneEnd)); // až dozní původní znak
+      await sleep(fixDelay(DS.toneEnd)); // until the original character has finished
       if (!DS.skip) await player.play(c).done;
       await sleep(afterFixGap());
     }
   }
   if (!DS.skip) {
     $('#ds-char').textContent = '';
-    $('#ds-status').textContent = `Rozlišování: ${ok} z ${seq.length}. Teď lekce.`;
+    $('#ds-status').textContent = t('discrim.done', { ok, n: seq.length });
     await sleep(1500);
   }
   player.stop();
@@ -363,21 +379,21 @@ async function runDiscrim(fresh, chars) {
 $('#ds-replay').addEventListener('click', () => repeatHandler?.());
 $('#ds-skip').addEventListener('click', () => pauseHandler?.());
 
-// ================= LEKCE =================
+// ================= LESSON =================
 const L = {
   drill: null, prior: {}, running: false, paused: false, answered: true, current: null,
   toneEnd: 0, repeats: 0, activeMs: 0, lastTick: 0, tick: null, pending: null, timeout: null,
-  warm: null, // rozcvička {gapH, n (počet pokusů rozcvičky, null = ještě běží), fresh}
+  warm: null, // warm-up {gapH, n (warm-up trials, null = still running), fresh}
   fresh: [], fat: null, fatEvents: [], fatPending: null, pauses: [], pauseAt: 0, rewarmUntil: 0,
-  flu: null, // M6: blok plynulosti {main (drill lekce), drill, tempo}
+  flu: null, // M6: fluency block {main (lesson drill), drill, tempo}
 };
-// ---- M6: tempo lekce ----
-// Lekce hraje nastavené tempo; při potížích (Drill.gapEase) delší mezery, v bloku plynulosti rychleji.
+// ---- M6: lesson pace ----
+// The lesson plays the configured pace; with difficulties (Drill.gapEase) longer gaps, in the fluency block faster.
 function setTempo() {
-  const t = L.flu ? L.flu.tempo : { wpm: settings.wpm, fwpm: L.drill.lessonFwpm(settings.fwpm) };
-  player.settings = { ...settings, ...t };
+  const tp = L.flu ? L.flu.tempo : { wpm: settings.wpm, fwpm: L.drill.lessonFwpm(settings.fwpm) };
+  player.settings = { ...settings, ...tp };
 }
-// Blok plynulosti (od U2, R1 kap. 6): konec lekce, zvládnuté znaky o stupeň rychleji, nezapočítává se.
+// Fluency block (from U2, R1 ch. 6): end of the lesson, mastered characters one step faster, not counted.
 function fluencyTempo() {
   const { wpm, fwpm } = settings;
   if (fwpm < wpm) return { wpm, fwpm: Math.min(wpm, fwpm + 3) };
@@ -389,17 +405,18 @@ function fluencyDue() {
   return ms > 0 && !L.flu && lessonMs() >= 3 * ms && L.activeMs >= lessonMs() - ms && !inWarmup();
 }
 function startFluency() {
+  tr('flu');
   const main = L.drill;
   let chars = main.chars.filter((c) => main.isMastered(c));
   if (chars.length < 4) chars = main.chars.filter((c) => c !== main.newChar);
   const tempo = fluencyTempo();
   L.flu = { main, drill: new Drill(chars, null, { prior: L.prior }), tempo };
   L.drill = L.flu.drill;
-  $('#ls-phase').textContent = `Blok plynulosti: známé znaky rychleji (${tempo.wpm}/${tempo.fwpm} WPM). Do výsledku se nepočítá.`;
+  $('#ls-phase').textContent = t('lesson.fluency', { wpm: tempo.wpm, fwpm: tempo.fwpm });
   $('#ls-phase').hidden = false;
 }
-// M5: základ pro únavu (začátek sezení) přežije mezi lekcemi téhož sezení; čas poslední únavy pro domovskou obrazovku
-const sessionFat = { base: null, key: null }; // 0.8.4: základ platí jen pro stejnou sadu znaků
+// M5: the fatigue baseline (start of the session) survives between lessons of the same session; time of the last fatigue for Home
+const sessionFat = { base: null, key: null }; // 0.8.4: the baseline only applies to the same character set
 let lastFatigueAt = 0;
 const activeS = () => Math.round(L.activeMs / 1000);
 const inWarmup = () => (L.warm && L.warm.n === null) || L.activeMs < L.rewarmUntil;
@@ -407,12 +424,13 @@ const inWarmup = () => (L.warm && L.warm.n === null) || L.activeMs < L.rewarmUnt
 function endRewarm() {
   if (!L.rewarmUntil || L.activeMs < L.rewarmUntil) return;
   L.rewarmUntil = 0;
+  tr('rewarmEnd');
   if (!(L.warm && L.warm.n === null)) { L.drill.setExclude([]); $('#ls-phase').hidden = true; }
 }
 
 function trackFatigue() {
-  const t = L.drill.trials.at(-1);
-  const r = L.fat.add({ ch: t.ch, ok: t.ok, ttr: t.ttr }, activeS(), !inWarmup() && !L.flu);
+  const tl = L.drill.trials.at(-1);
+  const r = L.fat.add({ ch: tl.ch, ok: tl.ok, ttr: tl.ttr }, activeS(), !inWarmup() && !L.flu);
   if (r.propose && !L.fatPending) L.fatPending = r;
 }
 
@@ -420,14 +438,16 @@ function proposeFatigue() {
   const r = L.fatPending;
   L.fatPending = null;
   L.fatEvents.push({ t: activeS(), kind: r.kind, ttrUp: r.ttrUp, accDrop: r.accDrop, action: null });
+  tr('fat', { kind: r.kind, ttrUp: r.ttrUp, accDrop: r.accDrop });
   pause(false);
   const why = r.kind === 'ttr'
-    ? `Reakce je už přes minutu o ${Math.round((r.ttrUp - 1) * 100)} % pomalejší než na začátku sezení.`
-    : `Úspěšnost je už přes minutu o ${Math.round(r.accDrop * 100)} p. b. nižší než na začátku sezení.`;
-  $('#fat-text').textContent = `${why} To bývá únava – krátká pauza (3–5 min: vstát, protáhnout se, napít) obvykle pomůže víc než další drill.`;
+    ? t('fatigue.whyTtr', { pct: Math.round((r.ttrUp - 1) * 100) })
+    : t('fatigue.whyAcc', { pp: Math.round(r.accDrop * 100) });
+  $('#fat-text').textContent = `${why} ${t('fatigue.advice')}`;
   $('#fatigue-overlay').hidden = false;
 }
 function fatigueChoice(action) {
+  tr('fatChoice', action);
   const e = L.fatEvents.at(-1);
   if (e) e.action = action;
   $('#fatigue-overlay').hidden = true;
@@ -445,35 +465,37 @@ function updatePause() {
   const long = s >= REWARM_PAUSE_MIN * 60;
   $('#pause-time').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   $('#pause-hint').textContent = long
-    ? `Po pauze začneš ${REWARM_S} s rozcvičkou známými znaky.`
-    : `Čas lekce stojí. Po pauze aspoň ${REWARM_PAUSE_MIN} min začne lekce krátkou rozcvičkou.`;
+    ? t('pause.rewarm', { s: REWARM_S })
+    : t('pause.hint', { min: REWARM_PAUSE_MIN });
 }
 
 function endWarmup() {
   if (!L.warm || L.warm.n !== null) return;
   L.warm.n = L.drill.trials.length;
-  if (L.activeMs < L.rewarmUntil) return; // ještě běží rozcvička po pauze
+  tr('warmEnd', L.warm.n);
+  if (L.activeMs < L.rewarmUntil) return; // the warm-up after a pause is still running
   L.drill.setExclude([]);
   $('#ls-phase').hidden = true;
 }
 
 function schedule(fn, ms) { clearTimeout(L.pending); L.pending = setTimeout(fn, ms); }
 function charGap() {
-  // Farnsworthova mezera mezi znaky určuje tempo dalšího znaku po odpovědi
+  // the Farnsworth gap between characters sets the pace of the next character after an answer
   return Math.max(300, Math.round(WPM.charSpace(player.settings.wpm, player.settings.fwpm)));
 }
 const afterFixGap = () => Math.max(1500, 2 * charGap());
 const lessonMs = () => settings.lessonMin * 60000;
 
 function startLesson(chars) {
-  L.prior = stats.chars || {}; // dlouhodobá statistika před touto lekcí (váhy výběru, šipky trendu)
+  L.prior = stats.chars || {}; // long-term statistics before this lesson (selection weights, trend arrows)
   L.drill = new Drill(chars, newestChar(), { prior: L.prior });
   const fatKey = chars.join('');
   const fat = new FatigueMonitor(sessionFat.key === fatKey ? sessionFat.base : null,
     { ref: fatigueRef(L.prior), newChar: newestChar() });
   Object.assign(L, { fat, fatKey, fatEvents: [], fatPending: null, pauses: [], rewarmUntil: 0, flu: null });
   if (L.warm) L.drill.setExclude(L.warm.fresh);
-  $('#ls-phase').textContent = 'Rozcvička – nejdřív známé znaky, ať je vidět, co sis zapamatoval(a).';
+  tr('lesson', { warm: !!L.warm, fatBase: !!fat.base });
+  $('#ls-phase').textContent = t('lesson.warmup');
   $('#ls-phase').hidden = !L.warm;
   Object.assign(L, { running: true, paused: false, answered: true, current: null, activeMs: 0, lastTick: performance.now() });
   show('lesson');
@@ -481,7 +503,7 @@ function startLesson(chars) {
   repeatHandler = onRepeat;
   pauseHandler = togglePause;
   $('#ls-char').textContent = '';
-  $('#ls-status').textContent = 'Připrav se…';
+  $('#ls-status').textContent = t('lesson.getReady');
   updateBar();
   clearInterval(L.tick);
   L.tick = setInterval(() => {
@@ -500,7 +522,7 @@ function updateBar() {
   $('#ls-time').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   $('#ls-progress').style.width = `${Math.min(100, (L.activeMs / lessonMs()) * 100)}%`;
   const d = L.drill;
-  $('#ls-acc').textContent = d && d.trials.length ? `${Math.round(d.accuracy * 100)} % · ${d.trials.length}` : '–';
+  $('#ls-acc').textContent = d && d.trials.length ? `${pct(d.accuracy)} · ${d.trials.length}` : '–';
 }
 
 function armTimeout() {
@@ -523,6 +545,9 @@ function nextTrial() {
   $('#ls-char').className = 'big-char';
   $('#ls-status').textContent = '';
   L.toneEnd = player.play(L.current).toneEnd;
+  // p: character, WPM, Farnsworth, ms until the tone ends, difficulty, phase (w warm-up, r after a pause, f fluency)
+  tr('p', [L.current, player.settings.wpm, player.settings.fwpm, Math.round(L.toneEnd - performance.now()),
+    L.drill.diff ?? null, inWarmup() ? 'w' : (L.rewarmUntil ? 'r' : (L.flu ? 'f' : ''))]);
   armTimeout();
 }
 
@@ -532,16 +557,17 @@ function onAnswer(ch, ts) {
   clearTimeout(L.timeout);
   const ttr = Math.round(ts - L.toneEnd);
   const ok = L.drill.record(L.current, ch, ttr, { repeats: L.repeats });
+  tr('a', [ch, ttr, ok ? 1 : 0]);
   trackFatigue();
   $('#ls-char').textContent = L.current;
   updateBar();
   if (ok) {
     $('#ls-char').className = 'big-char ok';
     $('#ls-status').textContent = `${ttr} ms`;
-    schedule(nextTrial, untilTone(L.toneEnd) + charGap()); // odpověď během znaku nesmí znak useknout
+    schedule(nextTrial, untilTone(L.toneEnd) + charGap()); // an answer during the character must not cut it off
   } else {
     $('#ls-char').className = 'big-char bad';
-    $('#ls-status').textContent = `Bylo to „${L.current}“ (ty: „${ch}“)`;
+    $('#ls-status').textContent = t('lesson.wasYou', { ch: L.current, ans: ch });
     kbd.flash(L.current, 'hint', 1500);
     schedule(playFix, fixDelay(L.toneEnd));
   }
@@ -551,20 +577,22 @@ function onTimeout() {
   if (!L.running || L.paused || L.answered) return;
   L.answered = true;
   L.drill.record(L.current, null, null, { timeout: true, repeats: L.repeats });
+  tr('to');
   trackFatigue();
   $('#ls-char').textContent = L.current;
   $('#ls-char').className = 'big-char miss';
-  $('#ls-status').textContent = `Bylo to „${L.current}“`;
+  $('#ls-status').textContent = t('lesson.was', { ch: L.current });
   kbd.flash(L.current, 'hint', 1500);
   updateBar();
   schedule(playFix, fixDelay(L.toneEnd));
 }
 
-// Opravné přehrání správného znaku, pak delší odstup – aby nesplynulo s dalším znakem.
-// Vše jde přes schedule(), takže pauza naplánované kroky zruší (dřív Promise .done po pauze
-// mohla naplánovat další znak navíc → dva znaky přes sebe).
+// Corrective playback of the right character, then a longer gap – so it does not merge with the next character.
+// Everything goes through schedule(), so a pause cancels the planned steps (a Promise .done after a pause
+// used to schedule an extra character → two characters on top of each other).
 function playFix() {
   if (!L.running || L.paused) return;
+  tr('fix');
   const { toneEnd } = player.play(L.current);
   schedule(nextTrial, untilTone(toneEnd) + afterFixGap());
 }
@@ -572,6 +600,7 @@ function playFix() {
 function onRepeat() {
   if (!L.running || L.paused || L.answered) return;
   L.repeats++;
+  tr('rep');
   L.toneEnd = player.play(L.current).toneEnd;
   armTimeout();
 }
@@ -580,6 +609,7 @@ function pause(overlay = true) {
   if (!L.running || L.paused) return;
   L.paused = true;
   L.pauseAt = Date.now();
+  tr('pause', overlay ? 1 : 0);
   player.stop();
   clearTimeout(L.timeout);
   clearTimeout(L.pending);
@@ -592,32 +622,33 @@ async function resume() {
   if (!L.running || !L.paused || resuming) return;
   resuming = true;
   const ps = Math.round((Date.now() - L.pauseAt) / 1000);
-  // Zvuk mohl být během pauzy uspán (Android, zhasnutá obrazovka) – probudit ještě v obsluze klepnutí.
+  // The audio may have been suspended during the pause (Android, screen off) – wake it up still inside the tap handler.
   const audioOk = await ensureAudio();
   resuming = false;
   if (!L.running || !L.paused) return;
-  if (!audioOk) { alert('Zvuk se nepodařilo zapnout – zkus znovu Pokračovat.'); return; }
+  tr('resume', [ps, audioOk ? 1 : 0, player.ctx?.state]);
+  if (!audioOk) { alert(t('audio.failedResume')); return; }
   const long = ps >= REWARM_PAUSE_MIN * 60;
   const wait = ps < 5 ? RESUME_SHORT_MS : (long ? RESUME_LONG_MS : RESUME_MS);
-  if (ps >= 5) player.warmUp(Math.min(1.5, (wait - 300) / 1000)); // neslyšitelné zahřátí výstupu
+  if (ps >= 5) player.warmUp(Math.min(1.5, (wait - 300) / 1000)); // inaudible warm-up of the output
   L.paused = false;
   L.lastTick = performance.now();
   $('#pause-overlay').hidden = true;
   $('#fatigue-overlay').hidden = true;
   $('#ls-char').textContent = '';
   $('#ls-char').className = 'big-char';
-  $('#ls-status').textContent = ps >= 5 ? 'Připrav se…' : '';
+  $('#ls-status').textContent = ps >= 5 ? t('lesson.getReady') : '';
   if (ps >= 5) L.pauses.push([activeS(), ps]);
-  if (ps >= 5) L.fat.reset(); // po pauze se únava měří znovu
+  if (ps >= 5) L.fat.reset(); // after a pause fatigue is measured anew
   if (long) {
-    // rozcvička po pauze: krátce jen známé znaky, do únavy ani do „rozcvičky sezení“ se nepočítá
+    // warm-up after a pause: briefly known characters only, counted neither for fatigue nor as the session warm-up
     L.rewarmUntil = L.activeMs + REWARM_S * 1000;
     if (L.fresh.length) L.drill.setExclude(L.fresh);
-    $('#ls-phase').textContent = 'Rozcvička po pauze – chvíli jen známé znaky.';
+    $('#ls-phase').textContent = t('lesson.rewarm');
     $('#ls-phase').hidden = false;
   }
   if (!L.answered) {
-    // znak přerušený pauzou zahrajeme znovu (nepočítá se jako opakování)
+    // the character interrupted by the pause is played again (does not count as a repeat)
     schedule(() => {
       if (!L.running || L.paused) return;
       $('#ls-status').textContent = '';
@@ -630,31 +661,33 @@ async function resume() {
 }
 $('#btn-resume').addEventListener('click', resume);
 $('#btn-finish').addEventListener('click', () => { $('#pause-overlay').hidden = true; finishLesson(); });
-// Esc / tlačítko pauzy při návrhu únavy = pauza
+// Esc / pause button while fatigue is proposed = pause
 const togglePause = () => { if (!$('#fatigue-overlay').hidden) fatigueChoice('pause'); else if (L.paused) resume(); else pause(); };
 
 function fatigueNote(trials) {
-  // M5: průběžná detekce (FatigueMonitor). Náhradní srovnání první a poslední třetiny jen bez základu sezení.
+  // M5: continuous detection (FatigueMonitor). Fallback comparison of the first and last third only without a session baseline.
   const ev = L.fatEvents.at(-1);
   if (ev) {
-    const what = ev.kind === 'ttr' ? `reakce byla o ${Math.round((ev.ttrUp - 1) * 100)} % pomalejší` : `úspěšnost byla o ${Math.round(ev.accDrop * 100)} p. b. nižší`;
-    return `Během lekce se ukázala únava (${what} než na začátku sezení). Před další lekcí si dej delší pauzu – aspoň ${SESSION_BREAK_MIN} min, nebo pokračuj zítra.`;
+    const what = ev.kind === 'ttr'
+      ? t('fatigue.noteTtr', { pct: Math.round((ev.ttrUp - 1) * 100) })
+      : t('fatigue.noteAcc', { pp: Math.round(ev.accDrop * 100) });
+    return t('fatigue.noteEvent', { what, min: SESSION_BREAK_MIN });
   }
   if (L.fat?.base) {
     if (!L.fat.last.held) return null;
-    return `Ke konci lekce ${L.fat.last.ttrUp >= FATIGUE_TTR ? 'se zpomalila reakce' : 'klesla úspěšnost'} proti začátku sezení – možná únava. Dej si před další lekcí pauzu.`;
+    return L.fat.last.ttrUp >= FATIGUE_TTR ? t('fatigue.noteEndTtr') : t('fatigue.noteEndAcc');
   }
   if (trials.length < 30) return null;
   const third = Math.floor(trials.length / 3);
-  const part = (ts) => ({ acc: ts.filter((t) => t.ok).length / ts.length, ttr: median(ts.filter((t) => t.ok && t.ttr != null).map((t) => t.ttr)) });
+  const part = (ts) => ({ acc: ts.filter((x) => x.ok).length / ts.length, ttr: median(ts.filter((x) => x.ok && x.ttr != null).map((x) => x.ttr)) });
   const f = fatigueSignal(part(trials.slice(0, third)), part(trials.slice(-third)));
   if (!f.tired) return null;
-  const why = f.ttrUp >= FATIGUE_TTR ? `reakce se zpomalila o ${Math.round((f.ttrUp - 1) * 100)} %` : `úspěšnost klesla o ${Math.round(f.accDrop * 100)} p. b.`;
-  return `Ke konci lekce ${why} – možná únava. Dej si před další lekcí pauzu.`;
+  return f.ttrUp >= FATIGUE_TTR
+    ? t('fatigue.noteThirdTtr', { pct: Math.round((f.ttrUp - 1) * 100) })
+    : t('fatigue.noteThirdAcc', { pp: Math.round(f.accDrop * 100) });
 }
 
 const ARROWS = { up: '↑', down: '↓', flat: '→' };
-const ARROW_TITLES = { up: 'lepší než dlouhodobě', down: 'horší než dlouhodobě', flat: 'jako dlouhodobě' };
 
 function finishLesson() {
   L.running = false;
@@ -668,7 +701,7 @@ function finishLesson() {
   $('#pause-overlay').hidden = true;
   if (L.fat?.base) Object.assign(sessionFat, { base: L.fat.base, key: L.fatKey });
   if (L.fatEvents.length || L.fat?.last.held) lastFatigueAt = Date.now();
-  const prevAcc = progress.history.filter((h) => (h.mode || 'znak') === 'znak').at(-1)?.acc ?? null;
+  const prevAcc = progress.history.filter((h) => (h.mode || MODE_CHAR) === MODE_CHAR).at(-1)?.acc ?? null;
   player.settings = settings;
   let flu = null;
   if (L.flu) {
@@ -678,15 +711,15 @@ function finishLesson() {
     L.flu = null;
   }
   const sum = L.drill.summary();
-  if (sum.trials === 0) { show('home'); return; }
+  if (sum.trials === 0) { traceEnd(null, { empty: true }); show('home'); return; }
   const warmup = L.warm ? warmupStats(L.drill.trials.slice(0, L.warm.n ?? L.drill.trials.length), L.warm.gapH) : null;
 
   const levelBefore = progress.level;
   const a = sum.advance;
-  // smyčka b: postup v lekci musí platit v jiném sezení, než kdy přibyl nejnovější znak (upevnění spánkem)
+  // loop b: advancing in a lesson must hold in a different session than the one where the newest character was added (consolidation by sleep)
   const gate = a.ok ? confirmGate([...progress.history, { at: new Date().toISOString(), level: levelBefore }], levelBefore, Date.now()) : null;
   const adv = !a.ok ? a.reason : (progress.level >= KOCH_ORDER.length ? 'full' : (gate.ok ? 'ok' : 'confirm'));
-  addLesson({
+  const saved = addLesson({
     at: new Date().toISOString(), device: deviceKind(), level: levelBefore, durS: Math.round(L.activeMs / 1000),
     trials: sum.trials, correct: sum.correct, acc: sum.accuracy, ttr: sum.medianTtr,
     wpm: settings.wpm, fwpm: settings.fwpm,
@@ -699,77 +732,85 @@ function finishLesson() {
       ...(flu ? { fluency: flu } : {}),
     },
   });
+  traceEnd(saved.id, { trials: sum.trials, acc: sum.accuracy, ttr: sum.medianTtr, adv, activeS: Math.round(L.activeMs / 1000) });
   let verdict;
   const rec = a.recent === null ? null : Math.round(a.recent * 100);
-  const nc = a.newChar ? `„${a.newChar}“` : '';
+  const nc = a.newChar || '';
   if (adv === 'confirm') {
-    verdict = `Výborně, ${rec} %! Znak ${nc} se potvrdí v příštím sezení (za ${String(Math.max(0.5, gate.waitH)).replace('.', ',')} h nebo zítra) – paměť si ho přes pauzu a spánek upevní. Pak přibude další znak.`;
+    verdict = t('verdict.confirm', { pct: rec, ch: nc, h: Math.max(0.5, gate.waitH) });
   } else if (a.ok && progress.level < KOCH_ORDER.length) {
     progress.level++;
-    verdict = `Výborně! ${rec} % v posledních ${ADVANCE_WINDOW} znacích. Další lekce přidá znak „${KOCH_ORDER[progress.level - 1]}“.`;
+    verdict = t('verdict.advance', { pct: rec, n: ADVANCE_WINDOW, ch: KOCH_ORDER[progress.level - 1] });
   } else if (a.ok) {
-    verdict = `Výborně! ${rec} % – máš celou sadu.`;
+    verdict = t('verdict.full', { pct: rec });
   } else if (a.reason === 'few') {
-    verdict = `Pro přidání znaku je potřeba aspoň ${ADVANCE_WINDOW} znaků v lekci (teď ${sum.trials}).`;
+    verdict = t('verdict.few', { n: ADVANCE_WINDOW, trials: sum.trials });
   } else if (a.reason === 'acc') {
-    verdict = `Pro přidání znaku je potřeba ${Math.round(ADVANCE_ACCURACY * 100)} % v posledních ${ADVANCE_WINDOW} znacích (teď ${rec} %). Pokračuj se stejnou sadou – plato je normální.`;
+    verdict = t('verdict.acc', { need: Math.round(ADVANCE_ACCURACY * 100), n: ADVANCE_WINDOW, pct: rec });
   } else if (a.reason === 'ttrUnstable') {
-    verdict = `Celkově ${rec} %, ale ke konci se reakce zpomalila (${Math.round((a.ttrRatio - 1) * 100)} %). Znak přidáme, až bude reakce stabilní – zkus to po pauze.`;
+    verdict = t('verdict.ttrUnstable', { pct: rec, slower: Math.round((a.ttrRatio - 1) * 100) });
   } else if (a.reason === 'newFew') {
-    verdict = `Celkově ${rec} %, ale nový znak ${nc} zazněl jen ${a.newN}× (potřeba ${NEW_MIN_N}×). Zkus delší lekci.`;
+    verdict = t('verdict.newFew', { pct: rec, ch: nc, n: a.newN, need: NEW_MIN_N });
   } else if (a.reason === 'newAcc') {
-    verdict = `Celkově ${rec} %, ale nový znak ${nc} jen ${Math.round(a.newAcc * 100)} % (potřeba ${Math.round(NEW_ACCURACY * 100)} %). Ještě ho procvič.`;
+    verdict = t('verdict.newAcc', { pct: rec, ch: nc, acc: Math.round(a.newAcc * 100), need: Math.round(NEW_ACCURACY * 100) });
   } else {
-    verdict = `Celkově ${rec} %, ale na nový znak ${nc} reaguješ pomaleji (${a.newTtr} ms, ostatní ${a.othersTtr} ms). Ještě ho procvič, ať ho poznáš okamžitě.`;
+    verdict = t('verdict.newSlow', { pct: rec, ch: nc, ttr: a.newTtr, others: a.othersTtr });
   }
   saveProgress();
 
-  $('#rs-acc').textContent = `${Math.round(sum.accuracy * 100)} %`;
+  $('#rs-acc').textContent = pct(sum.accuracy);
   $('#rs-ttr').textContent = sum.medianTtr !== null ? `${sum.medianTtr} ms` : '–';
   $('#rs-n').textContent = sum.trials;
   const fat = fatigueNote(L.drill.trials);
-  // M6: tempo v lekci
+  // M6: pace within the lesson
   const notes = [verdict];
   if (fat) notes.push(fat);
-  if (sum.gapLog.length) notes.push('Část lekce běžela s delšími mezerami (úspěšnost klesla pod 75 %) – to je v pořádku, trenér tak dává víc času na rozpoznání.');
-  if (flu) notes.push(`Blok plynulosti: ${Math.round(flu.acc * 100)} % při ${flu.wpm}/${flu.fwpm} WPM${flu.ttr ? `, reakce ${flu.ttr} ms` : ''} (do výsledku se nepočítá).`);
+  if (sum.gapLog.length) notes.push(t('result.gapEase'));
+  if (flu) {
+    notes.push(flu.ttr ? t('result.fluencyTtr', { pct: Math.round(flu.acc * 100), wpm: flu.wpm, fwpm: flu.fwpm, ttr: flu.ttr })
+      : t('result.fluency', { pct: Math.round(flu.acc * 100), wpm: flu.wpm, fwpm: flu.fwpm }));
+  }
   $('#rs-verdict').textContent = notes.join(' ');
   const ld = currentLoad();
   const rl = $('#rs-load');
   rl.hidden = false;
   rl.className = ld.suggestEnd || ld.dayWarn ? 'hint warn' : 'hint';
-  const gapTxt = warmup?.gapH != null ? ` po pauze ${warmup.gapH >= 24 ? `${Math.round(warmup.gapH / 24)} d` : `${String(warmup.gapH).replace('.', ',')} h`}` : '';
-  const drop = warmup && prevAcc != null && warmup.acc < prevAcc - 0.03;
-  const wu = warmup ? `Rozcvička: ${Math.round(warmup.acc * 100)} % z ${warmup.n} znaků${gapTxt}${prevAcc != null ? ` (konec minulého sezení ${Math.round(prevAcc * 100)} %)` : ''}${drop
-    ? ' – mírný pokles po pauze je normální, není to regres; během lekce se srovná. '
-    : ' – tak dobře si znaky pamatuješ. '}` : '';
+  let wu = '';
+  if (warmup) {
+    const gap = warmup.gapH == null ? ''
+      : warmup.gapH >= 24 ? t('result.afterDays', { n: Math.round(warmup.gapH / 24) }) : t('result.afterHours', { h: warmup.gapH });
+    const drop = prevAcc != null && warmup.acc < prevAcc - 0.03;
+    wu = t('result.warmup', { pct: Math.round(warmup.acc * 100), n: warmup.n, gap })
+      + (prevAcc != null ? t('result.warmupPrev', { pct: Math.round(prevAcc * 100) }) : '')
+      + (drop ? t('result.warmupDrop') : t('result.warmupOk'));
+  }
   rl.textContent = wu + (ld.dayWarn
-    ? `Dnes už ${fmtMin(ld.dayMin)} min. Víc než ${DAY_WARN_MIN} min denně už moc nepřidá – pokračuj raději zítra.`
+    ? t('result.loadDayWarn', { min: fmtMin(ld.dayMin), max: DAY_WARN_MIN })
     : ld.suggestEnd
-      ? `Sezení trvá ${fmtMin(ld.sessionMin)} min – po ${SESSION_END_MIN} min klesá soustředění. Navrhuji skončit; přes pauzu a spánek se naučené upevní.`
-      : `Sezení ${fmtMin(ld.sessionMin)} min. Před dalším blokem si dej aspoň 30 s pauzu.`);
+      ? t('result.loadSessionEnd', { min: fmtMin(ld.sessionMin), max: SESSION_END_MIN })
+      : t('result.loadSession', { min: fmtMin(ld.sessionMin) }));
 
   const rows = sum.perChar.filter((r) => r.n > 0)
-    .sort((a, b) => (a.acc - b.acc) || ((b.ttr || 0) - (a.ttr || 0)));
+    .sort((x, y) => (x.acc - y.acc) || ((y.ttr || 0) - (x.ttr || 0)));
   const tb = $('#rs-perchar');
   tb.textContent = '';
   for (const r of rows) {
-    const tr = document.createElement('tr');
+    const row = document.createElement('tr');
     const arrow = trendArrow(r, L.prior[r.ch]);
-    for (const txt of [r.ch, r.n, `${Math.round(r.acc * 100)} %`, r.ttr !== null ? `${r.ttr} ms` : '–', ARROWS[arrow] || '']) {
-      const td = document.createElement('td'); td.textContent = txt; tr.append(td);
+    for (const txt of [r.ch, r.n, pct(r.acc), r.ttr !== null ? `${r.ttr} ms` : '–', ARROWS[arrow] || '']) {
+      const td = document.createElement('td'); td.textContent = txt; row.append(td);
     }
-    if (arrow) { tr.lastChild.className = `arrow ${arrow}`; tr.lastChild.title = ARROW_TITLES[arrow]; }
-    if (r.acc < 0.9) tr.className = 'weak';
-    tb.append(tr);
+    if (arrow) { row.lastChild.className = `arrow ${arrow}`; row.lastChild.title = t(`result.trend.${arrow}`); }
+    if (r.acc < 0.9) row.className = 'weak';
+    tb.append(row);
   }
   $('#rs-conf').textContent = sum.confusions.length
-    ? `Záměny: ${sum.confusions.slice(0, 5).map((c) => `${c.pair} ${c.n}×`).join(', ')}`
-    : 'Žádné záměny.';
+    ? t('result.confusions', { list: sum.confusions.slice(0, 5).map((c) => `${c.pair} ${c.n}×`).join(', ') })
+    : t('result.noConfusions');
   show('result');
 }
 
-// ================= STATISTIKA =================
+// ================= STATISTICS =================
 function drawStats() {
   renderDashboard($('#dash-root'), coachInfo.data?.dashboard || null);
   renderStats($('#stats-root'), {
@@ -778,7 +819,7 @@ function drawStats() {
   });
 }
 
-// ================= NASTAVENÍ =================
+// ================= SETTINGS =================
 const steppers = [];
 const target = (d) => (d.target === 'progress' ? progress : settings);
 
@@ -786,12 +827,13 @@ function renderSteppers() {
   for (const { el, out, minus, plus } of steppers) {
     const d = el.dataset;
     const v = target(d)[d.key];
-    out.textContent = Math.round(v * Number(d.scale || 1)) + d.unit;
+    out.textContent = Math.round(v * Number(d.scale || 1)) + (d.unitKey ? t(d.unitKey) : d.unit);
     minus.disabled = v <= Number(d.min) + 1e-9;
     plus.disabled = v >= Number(d.max) - 1e-9 || (d.key === 'fwpm' && v >= settings.wpm);
   }
   $('#wpm-warn').hidden = settings.wpm >= 15;
   $('#auto-speed').checked = settings.autoSpeed !== 0;
+  for (const sel of document.querySelectorAll('.lang-select')) sel.value = lang;
 }
 $('#auto-speed').addEventListener('change', (e) => {
   settings.autoSpeed = e.target.checked ? 1 : 0;
@@ -809,24 +851,42 @@ function initSteppers() {
         const step = Number(d.step);
         let v = Math.round((obj[d.key] + dir * step) / step) * step;
         obj[d.key] = Math.min(Number(d.max), Math.max(Number(d.min), Number(v.toFixed(3))));
-        if (settings.fwpm > settings.wpm) settings.fwpm = settings.wpm; // mezery nesmí být rychlejší než znak
+        if (settings.fwpm > settings.wpm) settings.fwpm = settings.wpm; // gaps must not be faster than the character
         if (d.target === 'progress') saveProgress(); else saveSettings();
         renderSteppers();
       });
       return b;
     };
-    const minus = mk('−', 'snížit', -1);
+    const minus = mk('−', t('settings.decrease'), -1);
     const out = document.createElement('output');
-    const plus = mk('+', 'zvýšit', +1);
+    const plus = mk('+', t('settings.increase'), +1);
     el.append(minus, out, plus);
     steppers.push({ el, out, minus, plus });
+  }
+}
+
+// ---- language (I18N): login page and Settings; stored locally and, when logged in, in the account settings ----
+function initLangSelects() {
+  for (const sel of document.querySelectorAll('.lang-select')) {
+    for (const l of LANGUAGES) sel.add(new Option(l.name, l.code, false, l.code === lang));
+    sel.addEventListener('change', () => {
+      if (session.user && session.user.role !== 'admin') { settings.lang = sel.value; saveSettings(); }
+      setLang(sel.value);
+    });
+  }
+}
+// The language chosen on another device (account settings) wins over the local one – applied after a sync.
+function applyAccountLang() {
+  if (session.langPinned) return;
+  if (settings.lang && settings.lang !== lang && !sync.dirtySettings && LANGUAGES.some((l) => l.code === settings.lang)) {
+    setLang(settings.lang);
   }
 }
 
 $('#play-k').addEventListener('click', async () => { if (await ensureAudio()) player.play('K'); });
 $('#play-paris').addEventListener('click', async () => { if (await ensureAudio()) player.play('PARIS PARIS'); });
 
-// ================= diagnostika a instalace =================
+// ================= diagnostics and installation =================
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('#install').hidden = false; });
 window.addEventListener('appinstalled', () => { $('#install').hidden = true; });
@@ -835,53 +895,56 @@ $('#install').addEventListener('click', () => { if (installEvt) { installEvt.pro
 async function refreshDiag() {
   const lat = player.latencyInfo();
   let ver = '?';
-  try { ver = (await (await fetch('/api/health')).json()).version; } catch (e) { ver = 'server nedostupný'; }
+  try { ver = (await (await fetch('/api/health')).json()).version; } catch (e) { ver = t('diag.serverDown'); }
   const standalone = matchMedia('(display-mode: standalone)').matches;
+  const yes = t('diag.yes');
   const rows = [
-    ['Verze', ver],
-    ['HTTPS', window.isSecureContext ? 'ano ✓' : 'NE'],
-    ['Spuštěno jako aplikace', standalone ? 'ano ✓' : 'ne (v prohlížeči)'],
-    ['Wake Lock', 'wakeLock' in navigator ? 'ano ✓' : 'ne'],
-    ['Zvuk', player.ctx ? player.ctx.state : 'zatím nezapnut'],
-    ['Latence zvuku', lat ? `základní ${lat.base} ms, výstup ${lat.output} ms` : '– (zapni zvuk tlačítkem Přehrát)'],
-    ['Uloženo lekcí', String(progress.history.length)],
-    ['Neodeslané lekce', String(sync.outbox.length)],
-    ['Zařízení', deviceKind() === 'mobil' ? 'mobil (dotyk)' : 'PC'],
-    ['Adresa', isPublic() ? 'venku přes internet' : 'domácí síť'],
+    [t('diag.version'), ver],
+    ['HTTPS', window.isSecureContext ? yes : t('diag.NO')],
+    [t('diag.standalone'), standalone ? yes : t('diag.inBrowser')],
+    ['Wake Lock', 'wakeLock' in navigator ? yes : t('diag.no')],
+    [t('diag.audio'), player.ctx ? player.ctx.state : t('diag.audioOff')],
+    [t('diag.latency'), lat ? t('diag.latencyVal', { base: lat.base, output: lat.output }) : t('diag.latencyNone')],
+    [t('diag.lessons'), String(progress.history.length)],
+    [t('diag.outbox'), String(sync.outbox.length)],
+    [t('diag.device'), deviceKind() === DEVICE_MOBILE ? t('diag.mobile') : 'PC'],
+    [t('diag.address'), isPublic() ? t('site.public') : t('site.home')],
   ];
   const tb = $('#diag');
   tb.textContent = '';
   for (const [k, v] of rows) {
-    const tr = document.createElement('tr');
+    const row = document.createElement('tr');
     const th = document.createElement('th'); th.textContent = k;
     const td = document.createElement('td'); td.textContent = v;
-    tr.append(th, td); tb.append(tr);
+    row.append(th, td); tb.append(row);
   }
 }
 
 // ================= start =================
 initSteppers();
-{ // 0.8.2: odkaz na druhou verzi aplikace (domácí ↔ venkovní) v Diagnostice
+initLangSelects();
+{ // 0.8.2: link to the other version of the app (home ↔ outside) in Diagnostics
   const o = otherSite();
   const a = $('#other-site');
   if (o) { a.href = o.url; a.textContent = `${o.label} (${o.name})`; } else a.hidden = true;
-  if (isPublic()) document.title = 'Morse venku';
+  if (isPublic()) document.title = t('app.titlePublic');
 }
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
-// Data ze serveru (jiné zařízení) – překreslit, ale nikdy ne uprostřed lekce.
+// Data from the server (another device) – redraw, but never in the middle of a lesson.
 onDataChange(() => {
+  if (['home', 'settings', 'account', 'stats', 'result', 'copyresult'].includes(view)) applyAccountLang();
   if (view === 'home') renderHome();
   else if (view === 'settings') renderSteppers();
   else if (view === 'account') renderAccount();
   else if (view === 'stats') drawStats();
 });
-// Návrat do aplikace (telefon ↔ PC) → stáhnout novinky.
+// Back in the app (phone ↔ PC) → fetch news.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && ['home', 'settings', 'account', 'result', 'stats', 'copyresult'].includes(view)) backgroundSync();
-  if (document.visibilityState === 'hidden' && view === 'copy') copyCtl.hold(); // proud nesmí běžet do prázdna
+  if (document.visibilityState === 'hidden' && view === 'copy') copyCtl.hold(); // the stream must not run into the void
   player.keepAlive(document.visibilityState === 'visible' && ['lesson', 'intro', 'discrim', 'copy'].includes(view));
 });
 window.addEventListener('online', () => backgroundSync());
 
-startAuth(show).then((ok) => { if (ok) show('home'); });
+startAuth(show).then((ok) => { if (ok) { applyAccountLang(); show('home'); } });

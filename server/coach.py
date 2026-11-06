@@ -1,89 +1,83 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Trenér nad lekcemi (M4): dotazník → archetyp + modifikátory, kalibrace, odhad plánu, úrovně U1–U6, plato.
+"""Coach over lessons (M4): questionnaire → archetype + modifiers, calibration, plan estimate, levels U1–U6, plateau.
 
-Vše jsou čisté funkce (bez DB a Flasku), testy v tests/test_coach_server.py.
-Soukromí: odpovědi dotazníku se NEUKLÁDAJÍ (mohou prozrazovat zdravotní stav). Uloží se jen výsledek:
-archetyp, modifikátory a preference. Modifikátory jsou pojmenované podle potřeby (čtení, psaní…), ne podle diagnózy.
+All are pure functions (no DB and no Flask), tests in tests/test_coach_server.py. Texts for the UI are translated
+by server.i18n.t (the request language).
+Privacy: questionnaire answers are NOT stored (they may reveal health). Only the result is stored:
+archetype, modifiers and preferences. Modifiers are named by need (reading, typing…), not by diagnosis.
 """
 import json
 from datetime import datetime
 
-# ================= dotazník =================
-# Každá otázka: id, text, možnosti [(hodnota, text)], volitelně "when" = (id otázky, {povolené hodnoty}).
+from server.i18n import fmt_num, t
+
+# Lesson mode – stored values (DB, API, traces): character by character with an answer ("znak" = character),
+# copy behind ("skluz" = lag).
+MODE_CHAR = "znak"
+MODE_COPY = "skluz"
+
+# ================= questionnaire =================
+# Each question: id, option values, optionally "when" = (question id, {allowed values}).
+# Texts: server/i18n "quiz.q.<id>" (question) and "quiz.q.<id>.<value>" (option).
 QUESTIONS = [
-    {"id": "age", "text": "Kolik ti je let?", "options": [
-        ("child", "8–12"), ("teen", "13–17"), ("adult", "18–59"), ("senior", "60 a víc")]},
-    {"id": "exp", "text": "Jakou máš zkušenost s Morseovou abecedou?", "options": [
-        ("none", "Žádnou, začínám"),
-        ("ear", "Kdysi jsem ji uměl(a) sluchem"),
-        ("table", "Kdysi jsem ji uměl(a) z tabulky – počítal(a) jsem tečky a čárky"),
-        ("active", "Používám ji, chci se zlepšit")]},
-    {"id": "speed", "text": "Jakou rychlost přijímáš (nebo jsi přijímal(a))?", "when": ("exp", {"ear", "table", "active"}),
-     "options": [("unknown", "Nevím"), ("slow", "Do 10 WPM"), ("mid", "10–18 WPM"), ("fast", "20 WPM a víc")]},
-    {"id": "gaps", "text": "Co ti chybí nejvíc?", "when": ("exp", {"ear", "table", "active"}), "options": [
-        ("most", "Skoro všechno"), ("numpunct", "Hlavně čísla a interpunkce"), ("few", "Jen pár znaků"),
-        ("unknown", "Nevím")]},
-    {"id": "time", "text": "Kolik času denně můžeš cvičit?", "options": [
-        ("lt10", "Méně než 10 minut"), ("10to20", "10–20 minut"), ("20to40", "20–40 minut"), ("gt40", "Víc než 40 minut")]},
-    {"id": "rhythm", "text": "Jak pravidelně budeš cvičit?", "options": [
-        ("daily", "Skoro každý den"), ("often", "Několikrát týdně"), ("weekend", "Hlavně o víkendu"),
-        ("irregular", "Nepravidelně, jak to vyjde")]},
-    {"id": "pace", "text": "Jaké tempo učení ti vyhovuje?", "options": [
-        ("slow", "Pomalu a jistě"), ("normal", "Normální"), ("fast", "Rychle, rád(a) se zapotím")]},
-    {"id": "music", "text": "Hraješ na hudební nástroj nebo zpíváš?", "options": [
-        ("yes", "Ano, pravidelně"), ("some", "Trochu nebo dřív"), ("no", "Ne")]},
-    {"id": "reading", "text": "Jak ti jde čtení textu a písmen na obrazovce?", "options": [
-        ("easy", "Bez potíží"), ("slow", "Čtu raději větší písmo"), ("hard", "Čtení mi dělá potíže")]},
-    {"id": "typing", "text": "Jak ti jde psaní na klávesnici nebo ťukání na malé klávesy v mobilu?", "options": [
-        ("easy", "Bez potíží"), ("slow", "Jde to, ale pomaleji"), ("hard", "Je to pro mě obtížné")]},
-    {"id": "focus", "text": "Jak dlouho se vydržíš soustředit na jednu věc?", "options": [
-        ("long", "Půl hodiny i déle"), ("mid", "10–20 minut"), ("short", "Spíš jen pár minut")]},
-    {"id": "hearing", "text": "Jak slyšíš tóny (pípání)?", "options": [
-        ("ok", "Bez potíží"), ("some", "Některé tóny slyším hůř"), ("hard", "Slyším hůř nebo používám sluchadlo")]},
-    {"id": "errors", "text": "Jak na tebe působí chyby při učení?", "options": [
-        ("fine", "Nevadí mi, učím se z nich"), ("some", "Trochu mě štvou"), ("upset", "Hodně mě rozhodí")]},
-    {"id": "numbers", "text": "Zajímají tě podrobná čísla a grafy o pokroku?", "options": [
-        ("yes", "Ano, podrobně"), ("basic", "Stačí přehled"), ("no", "Ne")]},
+    {"id": "age", "options": ["child", "teen", "adult", "senior"]},
+    {"id": "exp", "options": ["none", "ear", "table", "active"]},
+    {"id": "speed", "when": ("exp", {"ear", "table", "active"}), "options": ["unknown", "slow", "mid", "fast"]},
+    {"id": "gaps", "when": ("exp", {"ear", "table", "active"}), "options": ["most", "numpunct", "few", "unknown"]},
+    {"id": "time", "options": ["lt10", "10to20", "20to40", "gt40"]},
+    {"id": "rhythm", "options": ["daily", "often", "weekend", "irregular"]},
+    {"id": "pace", "options": ["slow", "normal", "fast"]},
+    {"id": "music", "options": ["yes", "some", "no"]},
+    {"id": "reading", "options": ["easy", "slow", "hard"]},
+    {"id": "typing", "options": ["easy", "slow", "hard"]},
+    {"id": "focus", "options": ["long", "mid", "short"]},
+    {"id": "hearing", "options": ["ok", "some", "hard"]},
+    {"id": "errors", "options": ["fine", "some", "upset"]},
+    {"id": "numbers", "options": ["yes", "basic", "no"]},
 ]
 QMAP = {q["id"]: q for q in QUESTIONS}
 
 ARCHETYPES = {
-    # id: (název, priorita minut čistého drillu na 1 znak (od, do) – jen počáteční odhad před kalibrací)
-    "Z01": ("Nováček – standard", (20, 60)),
-    "Z02": ("Nováček – hudebně nadaný", (12, 40)),
-    "Z03": ("Nováček – pozvolný", (30, 90)),
-    "Z04": ("Nováček – málo času", (20, 60)),
-    "Z05": ("Nováček – intenzivní", (15, 45)),
-    "Z06": ("Dítě 8–12", (20, 70)),
-    "Z07": ("Teenager", (15, 50)),
-    "Z08": ("Senior 60+", (30, 100)),
-    "Z09": ("Návrat – kdysi sluchem", (5, 20)),
-    "Z10": ("Návrat – „počítač teček“", (20, 70)),
-    "Z11": ("Návrat – chybí čísla a interpunkce", (8, 30)),
-    "Z12": ("Aktivní 10–18 WPM", (3, 15)),
-    "Z13": ("Aktivní 20+ WPM", (2, 10)),
-    "Z14": ("Nepravidelný / víkendový", (25, 80)),
+    # id: (translation key of the name, minutes of net drill per character (from, to) – only an initial estimate
+    # before calibration). Names: beginner standard / musical / gradual / little time / intensive, child 8–12,
+    # teenager, senior 60+, returning (by ear / "dot counter" / missing numbers), active 10–18 / 20+ WPM, irregular.
+    "Z01": ("coach.arch.Z01", (20, 60)),
+    "Z02": ("coach.arch.Z02", (12, 40)),
+    "Z03": ("coach.arch.Z03", (30, 90)),
+    "Z04": ("coach.arch.Z04", (20, 60)),
+    "Z05": ("coach.arch.Z05", (15, 45)),
+    "Z06": ("coach.arch.Z06", (20, 70)),
+    "Z07": ("coach.arch.Z07", (15, 50)),
+    "Z08": ("coach.arch.Z08", (30, 100)),
+    "Z09": ("coach.arch.Z09", (5, 20)),
+    "Z10": ("coach.arch.Z10", (20, 70)),
+    "Z11": ("coach.arch.Z11", (8, 30)),
+    "Z12": ("coach.arch.Z12", (3, 15)),
+    "Z13": ("coach.arch.Z13", (2, 10)),
+    "Z14": ("coach.arch.Z14", (25, 80)),
 }
-MODIFIERS = {
-    "M15": "Čtení – větší písmo, méně textu",
-    "M16": "Psaní – víc času na odpověď, větší klávesy",
-    "M17": "Pozornost – kratší bloky, víc střídání",
-    "M18": "Sluch – kontrola tónu a hlasitosti, sluchátka",
-    "M19": "Citlivost na chyby – jemnější zpětná vazba",
-    "M20": "Analytik – podrobné statistiky",
-}
-MODIFIER_ORDER = ["M18", "M16", "M15", "M17", "M19", "M20"]  # priorita, max. 2
+# id: translation key – reading, typing, attention, hearing, sensitivity to errors, analyst
+MODIFIERS = {m: f"coach.mod.{m}" for m in ("M15", "M16", "M17", "M18", "M19", "M20")}
+MODIFIER_ORDER = ["M18", "M16", "M15", "M17", "M19", "M20"]  # priority, max. 2
 MAX_MODIFIERS = 2
 
 
+def archetype_name(arch):
+    return t(ARCHETYPES[arch][0]) if arch in ARCHETYPES else None
+
+
+def modifier_name(mod):
+    return t(MODIFIERS[mod]) if mod in MODIFIERS else None
+
+
 def clean_answers(raw):
-    """Jen známé otázky a hodnoty; podmíněné otázky jen pokud platí podmínka."""
+    """Only known questions and values; conditional questions only when the condition holds."""
     out = {}
     if not isinstance(raw, dict):
         return out
     for q in QUESTIONS:
         v = raw.get(q["id"])
-        if v in {o[0] for o in q["options"]}:
+        if v in q["options"]:
             out[q["id"]] = v
     for q in QUESTIONS:
         w = q.get("when")
@@ -93,7 +87,7 @@ def clean_answers(raw):
 
 
 def archetype_of(a):
-    """Základní archetyp Z01–Z14 podle odpovědí (pořadí pravidel = priorita)."""
+    """Basic archetype Z01–Z14 from the answers (order of the rules = priority)."""
     exp = a.get("exp", "none")
     if exp == "active":
         return "Z13" if a.get("speed") == "fast" else "Z12"
@@ -133,12 +127,12 @@ def modifiers_of(a):
     return [m for m in MODIFIER_ORDER if hit[m]][:MAX_MODIFIERS]
 
 
-DAY_MIN = {"lt10": 10, "10to20": 15, "20to40": 30, "gt40": 40}  # cíl minut denně (strop 60 = upozornění)
+DAY_MIN = {"lt10": 10, "10to20": 15, "20to40": 30, "gt40": 40}  # goal of minutes a day (cap 60 = warning)
 
 
 def prefs_of(arch, mods, a):
-    """Preference plynoucí z archetypu a modifikátorů. settings = návrh nastavení (klient ho použije)."""
-    # délka bloku 5–10 min (R1); pozornost (M17) kratší
+    """Preferences following from the archetype and modifiers. settings = suggested settings (the client applies them)."""
+    # block length 5–10 min (R1); attention (M17) shorter
     lesson = 5
     if arch in ("Z09", "Z11"):
         lesson = 7
@@ -155,7 +149,7 @@ def prefs_of(arch, mods, a):
     if arch == "Z13":
         wpm, fwpm = 25, 22
     if arch == "Z10":
-        fwpm = 12  # znak plnou rychlostí, aby nešlo počítat tečky; mezery delší
+        fwpm = 12  # character at full speed so that dots cannot be counted; longer gaps
     day = DAY_MIN.get(a.get("time"), 20)
     return {
         "settings": {"lessonMin": lesson, "wpm": wpm, "fwpm": min(fwpm, wpm)},
@@ -172,7 +166,7 @@ def prefs_of(arch, mods, a):
 
 
 def profile_from_answers(raw):
-    """Odpovědi → {archetype, modifiers, prefs}. Odpovědi samotné se nevracejí ani neukládají."""
+    """Answers → {archetype, modifiers, prefs}. The answers themselves are neither returned nor stored."""
     a = clean_answers(raw)
     arch = archetype_of(a)
     mods = modifiers_of(a)
@@ -180,22 +174,24 @@ def profile_from_answers(raw):
 
 
 def questions_json():
-    return [{"id": q["id"], "text": q["text"], "options": [{"value": v, "label": t} for v, t in q["options"]],
+    """Questions for the client, translated into the request language."""
+    return [{"id": q["id"], "text": t(f"quiz.q.{q['id']}"),
+             "options": [{"value": v, "label": t(f"quiz.q.{q['id']}.{v}")} for v in q["options"]],
              **({"when": {"q": q["when"][0], "in": sorted(q["when"][1])}} if q.get("when") else {})}
             for q in QUESTIONS]
 
 
-# ================= kalibrace a odhad plánu (R1 kap. 4) =================
+# ================= calibration and plan estimate (R1 ch. 4) =================
 SET_SIZE = 51
-CALIB_CHARS = 2       # kalibrace hotová po 2 přidaných znacích (nebo po 3 lekcích)
+CALIB_CHARS = 2       # calibration done after 2 added characters (or after 3 lessons)
 CALIB_LESSONS = 3
 DEFAULT_DAY_MIN = 20
 
 
 def additions(lessons, level):
-    """Přidané znaky z lekcí [{at, level, dur_s}] (nejstarší první): [(úroveň, minuty na ní)].
+    """Added characters from lessons [{at, level, dur_s}] (oldest first): [(level, minutes spent on it)].
 
-    Přidání = po lekci na úrovni L následuje lekce (nebo aktuální pokrok) na L + 1. Ruční skoky se nepočítají.
+    Addition = a lesson on level L is followed by a lesson (or the current progress) on L + 1. Manual jumps do not count.
     """
     mins = {}
     adds = []
@@ -208,7 +204,7 @@ def additions(lessons, level):
 
 
 def spread(n):
-    """Rozmezí kolem naměřené rychlosti – zužuje se s počtem přidaných znaků (rozptyl až 6×, R1)."""
+    """Range around the measured speed – it narrows with the number of added characters (spread up to 6×, R1)."""
     if n <= 0:
         return None
     return max(0.6, 1 - 0.4 / n ** 0.5), 1 + 1.2 / n ** 0.5
@@ -222,7 +218,7 @@ def plan_estimate(lessons, level, archetype, prefs):
     total = sum(m for _, m in adds)
     calibrated = n >= CALIB_CHARS or len(lessons) >= CALIB_LESSONS
     if calibrated and total + mins.get(level, 0) > 0:
-        # data mají přednost před archetypem; bez přidaného znaku počítáme, že ten současný je skoro hotový
+        # data win over the archetype; without an added character we assume the current one is almost done
         rate = (total + (0 if n else mins.get(level, 0))) / max(n, 1)
         lo_m, hi_m = spread(max(n, 1))
         per = (rate * lo_m, rate * hi_m)
@@ -233,7 +229,7 @@ def plan_estimate(lessons, level, archetype, prefs):
         source = "prior"
     left = max(0, SET_SIZE - level)
     cur = mins.get(level, 0)
-    # zbývající znaky + rozpracovaný nejnovější (minus minuty, které už na něm jsou)
+    # remaining characters + the newest one in progress (minus the minutes already spent on it)
     rem = [p * left + max(0, p - cur) if left else 0.0 for p in per]
     return {
         "source": source, "calibrated": source == "data", "added": n, "lessons": len(lessons),
@@ -244,42 +240,37 @@ def plan_estimate(lessons, level, archetype, prefs):
     }
 
 
-# ================= sezení, úrovně U1–U6, plato (R1 kap. 8, 4) =================
-SESSION_BREAK_MIN = 20     # stejné jako web/js/coach.js (test hlídá shodu)
-LEVEL_WINDOW = 20          # statistika znaků pro U1 z posledních 20 lekcí
-CHAR_MIN_N = 5             # znak musí zaznít aspoň 5×
+# ================= sessions, levels U1–U6, plateau (R1 ch. 8, 4) =================
+SESSION_BREAK_MIN = 20     # the same as web/js/coach.js (a test checks they match)
+LEVEL_WINDOW = 20          # character statistics for U1 from the last 20 lessons
+CHAR_MIN_N = 5             # a character must sound at least 5×
 CHAR_ACC = 0.9
-U2_WPM = 20                # U2 → U3: plná rychlost 20/20 WPM
+U2_WPM = 20                # U2 → U3: full speed 20/20 WPM
 U2_ACC = 0.9
-U2_TTR = {"pc": 600, "mobil": 800}  # medián TTR (ms) – odhad C, zpřesnit z dat; mobil má větší latenci
-PLATEAU_SESSIONS = 3       # ≥ 3 sezení bez postupu = plato (vysvětlit)
-PLATEAU_CHANGE = 5         # ≥ 5 sezení → navrhnout změnu plánu
+U2_TTR = {"pc": 600, "mobil": 800}  # median TTR (ms) by device ("mobil" = phone) – estimate C, refine from data; phones have more latency
+PLATEAU_SESSIONS = 3       # ≥ 3 sessions without progress = plateau (explain)
+PLATEAU_CHANGE = 5         # ≥ 5 sessions → suggest a change of plan
 
-ULEVELS = [
-    {"id": 1, "name": "Nováček", "content": "Kochova sada, znaky po jednom", "mode": "znak, čeká na odpověď",
-     "goal": "všech 51 znaků v sadě, každý ≥ 90 %"},
-    {"id": 2, "name": "Začátečník", "content": "celá sada, zkracování mezer (Farnsworth), okamžité rozpoznání",
-     "mode": "znak, čeká na odpověď", "goal": "plná rychlost 20/20 WPM, ≥ 90 %, medián reakce ≤ 600 ms (PC) / 800 ms (mobil)"},
-    {"id": 3, "name": "Mírně pokročilý", "content": "skupiny, pseudoslova a krátká slova", "mode": "příjem ve skluzu (proud bez čekání)",
-     "goal": "stabilní skluz ≥ 1 znak, ≥ 90 % po zarovnání, normální mezery"},
-    {"id": 4, "name": "Pokročilý", "content": "slova, zkratky, Q-kódy, volací znaky", "mode": "skluz celého slova",
-     "goal": "25 WPM, ≥ 90 % po zarovnání a slova ≥ 90 %"},
-    {"id": 5, "name": "Expert", "content": "věty, QSO, rušení, různé tóny", "mode": "dlouhý skluz",
-     "goal": "30–35 WPM"},
-    {"id": 6, "name": "Mistr", "content": "provoz, závody, příjem v hlavě", "mode": "otázky k obsahu",
-     "goal": "otevřené"},
-]
-MAX_COMPUTED_ULEVEL = 5    # M7: U3 → U4 ze skluzu; M8: U4 → U5; obsah U5+ zatím jen stav a kritéria
-COPY_MIN_CHARS = 60        # M7: sezení ve skluzu se hodnotí od 60 vyslaných znaků (shodně s web/js/copy.js)
+# Levels U1–U6; name/content/mode/goal are translated (server/i18n "coach.level.<id>.<field>"):
+# beginner, novice, intermediate, advanced, expert, master.
+ULEVELS = [{"id": i} for i in range(1, 7)]
+ULEVEL_FIELDS = ("name", "content", "mode", "goal")
+MAX_COMPUTED_ULEVEL = 5    # M7: U3 → U4 from copy behind; M8: U4 → U5; content of U5+ so far only state and criteria
+COPY_MIN_CHARS = 60        # M7: a copy-behind session is evaluated from 60 sent characters (same as web/js/copy.js)
+
+
+def ulevels():
+    """Levels U1–U6 with texts in the request language."""
+    return [{"id": u["id"], **{f: t(f"coach.level.{u['id']}.{f}") for f in ULEVEL_FIELDS}} for u in ULEVELS]
 
 
 def mode_of(r):
-    return r.get("mode") or "znak"
+    return r.get("mode") or MODE_CHAR
 
 
-def znak_only(lessons):
-    """Lekce po znacích (čeká na odpověď) – z nich se počítá statistika znaků, U1/U2, tempo a plato."""
-    return [r for r in lessons if mode_of(r) == "znak"]
+def char_lessons(lessons):
+    """Character lessons (waiting for an answer) – character statistics, U1/U2, pace and plateau are computed from them."""
+    return [r for r in lessons if mode_of(r) == MODE_CHAR]
 
 
 def _ms(iso):
@@ -290,7 +281,7 @@ def _ms(iso):
 
 
 def sessions_of(lessons):
-    """Lekce (nejstarší první) → seznam sezení (seznamy lekcí). Pauza ≥ 20 min mezi koncem a začátkem = nové."""
+    """Lessons (oldest first) → list of sessions (lists of lessons). A break ≥ 20 min between an end and a start = new one."""
     out = []
     prev_end = None
     for r in lessons:
@@ -316,26 +307,26 @@ def _detail(r):
 
 
 def char_table(lessons):
-    """{znak: (n, správně)} z detailu lekcí."""
-    t = {}
+    """{char: (n, correct)} from the lesson details."""
+    tab = {}
     for r in lessons:
         for x in _detail(r).get("perChar") or []:
             n = x.get("n") or 0
             if n and x.get("acc") is not None:
-                a, b = t.get(x["ch"], (0, 0))
-                t[x["ch"]] = (a + n, b + x["acc"] * n)
-    return t
+                a, b = tab.get(x["ch"], (0, 0))
+                tab[x["ch"]] = (a + n, b + x["acc"] * n)
+    return tab
 
 
 def u1_status(lessons, level):
-    """Kolik znaků z 51 drží ≥ 90 % (z ≥ 5 pokusů) v posledních lekcích, a zda je hotovo."""
-    t = char_table(znak_only(lessons)[-LEVEL_WINDOW:])
-    good = sum(1 for n, c in t.values() if n >= CHAR_MIN_N and c / n >= CHAR_ACC - 1e-9)
+    """How many of the 51 characters hold ≥ 90 % (of ≥ 5 trials) in recent lessons, and whether it is done."""
+    tab = char_table(char_lessons(lessons)[-LEVEL_WINDOW:])
+    good = sum(1 for n, c in tab.values() if n >= CHAR_MIN_N and c / n >= CHAR_ACC - 1e-9)
     return {"good": good, "of": SET_SIZE, "done": level >= SET_SIZE and good >= SET_SIZE}
 
 
 def session_summary(ses):
-    """Sezení → {n, acc, ttr (vážený medián), device (převažující), full (vše 20/20 WPM)}."""
+    """Session → {n, acc, ttr (weighted median), device (prevailing), full (all at 20/20 WPM)}."""
     n = sum(r.get("trials") or 0 for r in ses)
     if not n:
         return None
@@ -363,9 +354,9 @@ def u2_session_ok(ses):
 
 
 def computed_ulevel(lessons, level, stored=1):
-    """Úroveň z dat. Kritérium musí platit ve 2 po sobě jdoucích sezeních (R1 kap. 8).
-    U1/U2 z lekcí po znacích, U3 → U4 z lekcí ve skluzu (jen když je U3 dosažená nebo spočítaná)."""
-    zn = znak_only(lessons)
+    """Level from the data. A criterion must hold in 2 consecutive sessions (R1 ch. 8).
+    U1/U2 from character lessons, U3 → U4 from copy-behind lessons (only when U3 is reached or computed)."""
+    zn = char_lessons(lessons)
     ses = sessions_of(zn)
     comp = 1
     if len(ses) >= 2:
@@ -386,51 +377,46 @@ def computed_ulevel(lessons, level, stored=1):
 
 
 def next_criteria(ulevel, lessons, level):
-    """Co chybí do další úrovně – zpětná vazba o úkolu (ne o osobě)."""
+    """What is missing for the next level – feedback about the task (not about the person)."""
     if ulevel == 1:
         st = u1_status(lessons, level)
-        items = [f"znaky v sadě: {level} z {SET_SIZE}",
-                 f"znaky s ≥ 90 % v posledních lekcích: {st['good']} z {SET_SIZE}",
-                 "splnit ve 2 sezeních po sobě"]
+        items = [t("coach.next.u1Chars", level=level, of=SET_SIZE),
+                 t("coach.next.u1Good", good=st["good"], of=SET_SIZE),
+                 t("coach.next.twoSessions")]
         return {"target": 2, "items": items, "ratio": round(min(level, st["good"]) / SET_SIZE, 3)}
     if ulevel == 2:
-        ses = sessions_of(znak_only(lessons))
+        ses = sessions_of(char_lessons(lessons))
         s = session_summary(ses[-1]) if ses else None
-        items = ["rychlost znaku i mezer 20 WPM (zkracuj mezery postupně)",
-                 "úspěšnost ≥ 90 %, medián reakce ≤ 600 ms na PC / 800 ms na mobilu",
-                 "splnit ve 2 sezeních po sobě"]
+        items = [t("coach.next.u2Speed"), t("coach.next.u2Acc"), t("coach.next.twoSessions")]
         if s:
-            items.append(f"poslední sezení: {round(s['acc'] * 100)} %, reakce {s['ttr'] or '–'} ms"
-                         f"{'' if s['full'] else ', mezery ještě pod 20 WPM'}")
+            items.append(t("coach.next.u2Last", acc=round(s["acc"] * 100), ttr=s["ttr"] or "–")
+                         + ("" if s["full"] else t("coach.next.u2GapsSlow")))
         return {"target": 3, "items": items, "ratio": None}
     if ulevel == 3:
         last = COPY_STEPS[COPY_U3_LAST - 1]
-        items = [f"krok {last['step']} žebříku skluzu: {last['name']}, normální mezery mezi slovy",
-                 f"tempo aspoň {U2_WPM}/{U2_WPM} WPM, ≥ {round(COPY_U4_ACC * 100)} % po zarovnání, "
-                 f"≥ {COPY_MIN_CHARS} znaků v sezení",
-                 f"skluz stabilní – během lekce neujíždí o víc než {COPY_DRIFT_MAX} znak",
-                 "splnit ve 2 sezeních po sobě"]
+        items = [t("coach.next.u3Step", step=last["step"], name=step_name(last)),
+                 t("coach.next.u3Tempo", wpm=U2_WPM, acc=round(COPY_U4_ACC * 100), n=COPY_MIN_CHARS),
+                 t("coach.next.u3Drift", n=COPY_DRIFT_MAX),
+                 t("coach.next.twoSessions")]
         cs = copy_sessions(lessons)
         if cs:
             s = cs[0]
-            items.append(f"poslední sezení ve skluzu: krok {s['step']}, {round(s['acc'] * 100)} %"
-                         + (f", skluz {fmt_num(s['lagCh'])} zn." if s["lagCh"] is not None else ""))
+            items.append(t("coach.next.copyLast", step=s["step"], acc=round(s["acc"] * 100))
+                         + (t("coach.next.copyLastLag", lag=fmt_num(s["lagCh"])) if s["lagCh"] is not None else ""))
         return {"target": 4, "items": items, "ratio": None}
     if ulevel == 4:
         last = COPY_STEPS[-1]
-        items = [f"krok {last['step']} žebříku skluzu: {last['name']}, {last['wpm']} WPM",
-                 f"≥ {round(COPY_U5_ACC * 100)} % po zarovnání a celá slova ≥ {round(COPY_U5_WORDS * 100)} %, "
-                 f"≥ {COPY_MIN_CHARS} znaků v sezení",
-                 f"skluz stabilní – během lekce neujíždí o víc než {COPY_DRIFT_MAX_U4} znaky (skluz o slovo je v pořádku)",
-                 "splnit ve 2 sezeních po sobě"]
+        items = [t("coach.next.u4Step", step=last["step"], name=step_name(last), wpm=last["wpm"]),
+                 t("coach.next.u4Acc", acc=round(COPY_U5_ACC * 100), words=round(COPY_U5_WORDS * 100), n=COPY_MIN_CHARS),
+                 t("coach.next.u4Drift", n=COPY_DRIFT_MAX_U4),
+                 t("coach.next.twoSessions")]
         cs = copy_sessions(lessons)
         if cs:
             s = cs[0]
-            items.append(f"poslední sezení ve skluzu: krok {s['step']}, {s['wpm']} WPM, {round(s['acc'] * 100)} %"
-                         + (f", slova {round(s['words'] * 100)} %" if s["words"] is not None else ""))
+            items.append(t("coach.next.copyLastWpm", step=s["step"], wpm=s["wpm"], acc=round(s["acc"] * 100))
+                         + (t("coach.next.copyLastWords", words=round(s["words"] * 100)) if s["words"] is not None else ""))
         return {"target": 5, "items": items, "ratio": None}
-    return {"target": min(6, ulevel + 1), "items": ["věty, QSO a rušení (U5) připravujeme – zatím udržuj krok "
-                                                     f"{len(COPY_STEPS)} žebříku skluzu"], "ratio": None}
+    return {"target": min(6, ulevel + 1), "items": [t("coach.next.u5", n=len(COPY_STEPS))], "ratio": None}
 
 
 def _key(r):
@@ -438,8 +424,8 @@ def _key(r):
 
 
 def plateau(lessons, level):
-    """≥ 3 sezení bez postupu (nový znak, rychlejší znak nebo kratší mezery) → vysvětlení a procesní ukazatel."""
-    ses = sessions_of(znak_only(lessons))
+    """≥ 3 sessions without progress (new character, faster character or shorter gaps) → explanation and a process indicator."""
+    ses = sessions_of(char_lessons(lessons))
     if not ses:
         return None
     flat = [r for s in ses for r in s]
@@ -448,7 +434,7 @@ def plateau(lessons, level):
     for a, b in zip(flat, flat[1:]):
         ka, kb = _key(a), _key(b)
         if any(y > x for x, y in zip(ka, kb)):
-            last_prog = idx[id(a)]  # postup si vysloužilo sezení s lekcí před změnou
+            last_prog = idx[id(a)]  # progress was earned by the session with the lesson before the change
     if level > (flat[-1].get("level") or 0):
         last_prog = len(ses) - 1
     n = len(ses) - 1 - last_prog
@@ -459,48 +445,45 @@ def plateau(lessons, level):
     proc = None
     if first and last:
         if first["ttr"] and last["ttr"] and last["ttr"] <= first["ttr"] * 0.95:
-            proc = f"Reakce se zrychlila z {first['ttr']} na {last['ttr']} ms."
+            proc = t("coach.plateau.ttr", a=first["ttr"], b=last["ttr"])
         elif last["acc"] >= first["acc"] + 0.02:
-            proc = f"Úspěšnost vzrostla z {round(first['acc'] * 100)} na {round(last['acc'] * 100)} %."
+            proc = t("coach.plateau.acc", a=round(first["acc"] * 100), b=round(last["acc"] * 100))
     return {
         "sessions": n, "change": n >= PLATEAU_CHANGE, "process": proc,
-        "text": ("Plato: už {n} sezení bez nového kroku. To je normální – dovednost se upevňuje a pokrok přichází "
-                 "ve skocích, ne rovnoměrně.").format(n=n),
-        "advice": ("Zkus na pár dní změnu: kratší lekce 2× denně s pauzou mezi nimi a zaměř se na znaky, "
-                   "které se pletou (Pokrok → Kochova cesta, záměny). Pomáhá i rozcvička po spánku." if n >= PLATEAU_CHANGE else
-                   "Pokračuj v pravidelných krátkých lekcích, na výsledku sezení nezáleží tolik jako na pravidelnosti."),
+        "text": t("coach.plateau.text", n=n),
+        "advice": t("coach.plateau.adviceChange") if n >= PLATEAU_CHANGE else t("coach.plateau.advice"),
     }
 
 
 def level_info(lessons, level, stored):
-    """Úroveň pro API: max(uložená, z dat) – zpět se automaticky nevrací (jen resetem výcviku)."""
+    """Level for the API: max(stored, from data) – it does not go back automatically (only by a training reset)."""
     comp = min(MAX_COMPUTED_ULEVEL, computed_ulevel(lessons, level, stored))
     cur = max(stored or 1, comp)
-    return {"ulevel": cur, "computed": comp, "levels": ULEVELS, "next": next_criteria(cur, lessons, level)}
+    return {"ulevel": cur, "computed": comp, "levels": ulevels(), "next": next_criteria(cur, lessons, level)}
 
 
-# ================= tempo: rychlost znaku a Farnsworthovy mezery (M6) =================
-# Smyčka b pro tempo. Rozhoduje se mezi sezeními (potvrzení v dalším sezení, R1) a vždy jen o jeden prvek:
-# v U1 je novým prvkem znak (tempo se jen ulehčuje), v U2 se zkracují mezery a pak zrychluje znak k 20/20 WPM.
-# Bezstavové: počítá se jen ze sezení na AKTUÁLNÍM tempu, takže po změně (trenérem i ručně) se čeká na nová data.
-SPEED_SESSIONS = 2         # rozhodnutí z posledních 2 sezení na stejném tempu
-SPEED_MIN_TRIALS = 40      # sezení se počítá od 40 pokusů na daném tempu (kratší se přeskočí)
-SPEED_UP_ACC = 0.9         # zrychlit: obě sezení ≥ 90 % …
-SPEED_TTR_RATIO = 1.25     # … a reakce v posledním nejvýš 1,25× předchozího (stabilní)
-SPEED_EASE_ACC = 0.75      # obě sezení < 75 % → delší mezery o 1 WPM (ulehčit)
-FW_FAR = 6                 # mezery o ≥ 6 WPM pomalejší než znak → krok 2 WPM, jinak 1
-FW_MIN = 5                 # nejdelší mezery (efektivní rychlost)
-FW_PLATEAU_MIN = 10        # plato v U1 (≥ 5 sezení) prodlouží mezery o 2 WPM, nejvýš sem
+# ================= pace: character speed and Farnsworth gaps (M6) =================
+# Loop b for the pace. Decided between sessions (confirmation in the next session, R1) and always about one element only:
+# in U1 the new element is the character (the pace only gets easier), in U2 the gaps shorten and then the character speeds up to 20/20 WPM.
+# Stateless: computed only from sessions at the CURRENT pace, so after a change (by the coach or manual) new data are awaited.
+SPEED_SESSIONS = 2         # decision from the last 2 sessions at the same pace
+SPEED_MIN_TRIALS = 40      # a session counts from 40 trials at the given pace (shorter ones are skipped)
+SPEED_UP_ACC = 0.9         # speed up: both sessions ≥ 90 % …
+SPEED_TTR_RATIO = 1.25     # … and the reaction in the last one at most 1.25× the previous one (stable)
+SPEED_EASE_ACC = 0.75      # both sessions < 75 % → gaps longer by 1 WPM (easier)
+FW_FAR = 6                 # gaps ≥ 6 WPM slower than the character → step of 2 WPM, otherwise 1
+FW_MIN = 5                 # longest gaps (effective speed)
+FW_PLATEAU_MIN = 10        # a plateau in U1 (≥ 5 sessions) lengthens the gaps by 2 WPM, at most down to here
 FW_PLATEAU_STEP = 2
-FLUENCY_S = 60             # blok plynulosti od U2 (konec lekce, nezapočítává se) …
-FLUENCY_PLATEAU_S = 120    # … při platu v U2 delší
+FLUENCY_S = 60             # fluency block from U2 (end of the lesson, not counted) …
+FLUENCY_PLATEAU_S = 120    # … longer with a plateau in U2
 
 
 def speed_sessions(lessons, key):
-    """Souhrny posledních sezení na tempu key = (wpm, fwpm), nejnovější první.
-    Řada končí sezením bez lekce na tomto tempu; sezení s < 40 pokusy na tempu se přeskočí."""
+    """Summaries of the last sessions at pace key = (wpm, fwpm), newest first.
+    The series ends with a session without a lesson at this pace; sessions with < 40 trials at the pace are skipped."""
     out = []
-    for s in reversed(sessions_of(znak_only(lessons))):
+    for s in reversed(sessions_of(char_lessons(lessons))):
         part = [r for r in s if (r.get("wpm"), r.get("fwpm")) == key]
         if not part:
             break
@@ -510,13 +493,13 @@ def speed_sessions(lessons, key):
     return out
 
 
-def _tempo(wpm, fwpm):
-    return f"znak {wpm} WPM, mezery {fwpm} WPM" if fwpm < wpm else f"{wpm} WPM bez prodloužených mezer"
+def tempo_text(wpm, fwpm):
+    return t("coach.tempo.gaps", wpm=wpm, fwpm=fwpm) if fwpm < wpm else t("coach.tempo.full", wpm=wpm)
 
 
 def speed_advice(lessons, level, ulevel, cur, plat=None):
-    """Doporučené tempo. cur = {wpm, fwpm} (aktuální nastavení). Vrací {wpm, fwpm, change, next, fluencyS}.
-    change = {kind, from, to, why} když se má tempo změnit (ease | gaps | chars | plateau)."""
+    """Recommended pace. cur = {wpm, fwpm} (current settings). Returns {wpm, fwpm, change, next, fluencyS}.
+    change = {kind, from, to, why} when the pace should change (ease | gaps | chars | plateau)."""
     wpm, fwpm = int(cur.get("wpm") or 20), int(cur.get("fwpm") or 15)
     fwpm = min(fwpm, wpm)
     ses = speed_sessions(lessons, (wpm, fwpm))
@@ -526,81 +509,81 @@ def speed_advice(lessons, level, ulevel, cur, plat=None):
     to, kind, why = None, None, None
     if len(ses) >= SPEED_SESSIONS:
         a, b = ses[0], ses[1]
-        pct = f"{round(b['acc'] * 100)} % a {round(a['acc'] * 100)} %"
+        pct = t("coach.pctPair", a=round(b["acc"] * 100), b=round(a["acc"] * 100))
         stable = not (a["ttr"] and b["ttr"]) or a["ttr"] <= SPEED_TTR_RATIO * b["ttr"]
         if a["acc"] < SPEED_EASE_ACC and b["acc"] < SPEED_EASE_ACC and fwpm > FW_MIN:
             to, kind = (wpm, fwpm - 1), "ease"
-            why = f"Dvě sezení pod {round(SPEED_EASE_ACC * 100)} % ({pct}) – delší mezery dají víc času na rozpoznání."
+            why = t("coach.speed.ease", acc=round(SPEED_EASE_ACC * 100), pct=pct)
         elif u2 and a["acc"] >= SPEED_UP_ACC - 1e-9 and b["acc"] >= SPEED_UP_ACC - 1e-9 and stable:
             if fwpm < wpm:
                 to, kind = (wpm, min(wpm, fwpm + (2 if wpm - fwpm >= FW_FAR else 1))), "gaps"
-                why = f"Dvě sezení ≥ {round(SPEED_UP_ACC * 100)} % ({pct}) se stabilní reakcí – mezery se zkracují."
+                why = t("coach.speed.gaps", acc=round(SPEED_UP_ACC * 100), pct=pct)
             elif wpm < U2_WPM:
                 to, kind = (wpm + 1, fwpm), "chars"
-                why = f"Dvě sezení ≥ {round(SPEED_UP_ACC * 100)} % ({pct}) bez prodloužených mezer – zrychluje se znak (mezery chvíli delší)."
+                why = t("coach.speed.chars", acc=round(SPEED_UP_ACC * 100), pct=pct)
         elif not u2 and plat and plat.get("change") and len(ses) >= PLATEAU_CHANGE and fwpm > FW_PLATEAU_MIN:
             to, kind = (wpm, max(FW_PLATEAU_MIN, fwpm - FW_PLATEAU_STEP)), "plateau"
-            why = (f"Už {plat['sessions']} sezení bez nového znaku – změna plánu: delší mezery dají víc času "
-                   "na rozpoznání, nový znak pak přijde snáz. Mezery se zase zkrátí po celé sadě.")
+            why = t("coach.speed.plateau", n=plat["sessions"])
     if to:
         out["change"] = {"kind": kind, "from": {"wpm": wpm, "fwpm": fwpm}, "to": {"wpm": to[0], "fwpm": to[1]},
-                         "why": why, "text": f"Trenér změnil tempo: {_tempo(wpm, fwpm)} → {_tempo(*to)}."}
+                         "why": why, "text": t("coach.speed.changed", old=tempo_text(wpm, fwpm), new=tempo_text(*to))}
         out["wpm"], out["fwpm"] = to
-    # co dál (zpětná vazba o úkolu)
+    # what next (feedback about the task)
     if u2 and (fwpm < wpm or wpm < U2_WPM):
-        nxt = (f"Další zkrácení mezer po {SPEED_SESSIONS} sezeních ≥ {round(SPEED_UP_ACC * 100)} % na stejném tempu "
-               f"(zatím {min(len(ses), SPEED_SESSIONS)} z {SPEED_SESSIONS})." if fwpm < wpm else
-               f"Zrychlení znaku po {SPEED_SESSIONS} sezeních ≥ {round(SPEED_UP_ACC * 100)} % (zatím {min(len(ses), SPEED_SESSIONS)}).")
+        nxt = (t("coach.speed.nextGaps", n=SPEED_SESSIONS, acc=round(SPEED_UP_ACC * 100), done=min(len(ses), SPEED_SESSIONS))
+               if fwpm < wpm else
+               t("coach.speed.nextChars", n=SPEED_SESSIONS, acc=round(SPEED_UP_ACC * 100), done=min(len(ses), SPEED_SESSIONS)))
     elif u2:
-        nxt = ("Plné tempo 20/20 WPM – další krok je příjem ve skluzu (karta na Domů)." if ulevel >= 3 else
-               "Plné tempo 20/20 WPM – po 2 sezeních s rychlou reakcí se otevře příjem ve skluzu (U3).")
+        nxt = t("coach.speed.fullCopy") if ulevel >= 3 else t("coach.speed.fullU3")
     else:
-        nxt = "Během Kochovy sady se tempo nezrychluje (nový prvek je znak); mezery se zkracují po zvládnutí celé sady."
+        nxt = t("coach.speed.koch")
     out["next"] = nxt
-    out["tempo"] = _tempo(out["wpm"], out["fwpm"])
+    out["tempo"] = tempo_text(out["wpm"], out["fwpm"])
     return out
 
 
-# ================= příjem ve skluzu: žebřík kroků U3 (M7) =================
-# Jeden nový prvek najednou: obsah (skupiny → pseudoslova → slova) a zkracování mezery mezi slovy se střídají.
-# Bezstavové jako tempo: krok = krok poslední lekce ve skluzu, rozhodují 2 poslední sezení na tomto kroku.
-# M8 (U4, kroky 7–13): zkratky a Q-kódy → volací znaky → dlouhá slova (skluz celého slova) → směs → 21/23/25 WPM.
-# wpm = rychlost znaku i mezer v lekci ve skluzu (None = nastavení z M6); markLag = značka slova k až po slově
-# k+markLag (jen načasování zpětné vazby). U5 připojí další kroky (QSO, rušení, 27–35 WPM).
-def _st(step, ul, content, gapX, name, wpm=None, markLag=1):
-    return {"step": step, "ulevel": ul, "content": content, "gapX": gapX, "name": name, "wpm": wpm, "markLag": markLag}
+# ================= copy behind: ladder of steps U3 (M7) =================
+# One new element at a time: content (groups → pseudo-words → words) and shortening of the word gap alternate.
+# Stateless like the pace: step = the step of the last copy-behind lesson, the last 2 sessions on this step decide.
+# M8 (U4, steps 7–13): abbreviations and Q codes → call signs → long words (whole-word lag) → mix → 21/23/25 WPM.
+# wpm = speed of the character and gaps in a copy-behind lesson (None = settings from M6); markLag = the mark of word k
+# only after word k+markLag (just the timing of feedback). U5 will append more steps (QSO, interference, 27–35 WPM).
+# The name of a step is translated by its content ("coach.content.<content>").
+def _st(step, ul, content, gapX, wpm=None, markLag=1):
+    return {"step": step, "ulevel": ul, "content": content, "gapX": gapX, "wpm": wpm, "markLag": markLag}
 
 
 COPY_STEPS = [
-    _st(1, 3, "groups", 3.0, "skupiny 2–3 znaky"),
-    _st(2, 3, "groups", 2.0, "skupiny 2–3 znaky"),
-    _st(3, 3, "pseudo", 2.0, "pseudoslova 2–5 znaků"),
-    _st(4, 3, "pseudo", 1.5, "pseudoslova 2–5 znaků"),
-    _st(5, 3, "words", 1.5, "krátká slova"),
-    _st(6, 3, "words", 1.0, "krátká slova"),
-    _st(7, 4, "abbr", 1.0, "zkratky a Q-kódy", 20),
-    _st(8, 4, "calls", 1.0, "volací znaky", 20),
-    _st(9, 4, "long", 1.0, "delší slova 6–7 písmen (skluz celého slova)", 20, 2),
-    _st(10, 4, "mix", 1.0, "směs: slova, zkratky, volací znaky", 20, 2),
-    _st(11, 4, "mix", 1.0, "směs: slova, zkratky, volací znaky", 21, 2),
-    _st(12, 4, "mix", 1.0, "směs: slova, zkratky, volací znaky", 23, 2),
-    _st(13, 4, "mix", 1.0, "směs: slova, zkratky, volací znaky", 25, 2),
+    _st(1, 3, "groups", 3.0),
+    _st(2, 3, "groups", 2.0),
+    _st(3, 3, "pseudo", 2.0),
+    _st(4, 3, "pseudo", 1.5),
+    _st(5, 3, "words", 1.5),
+    _st(6, 3, "words", 1.0),
+    _st(7, 4, "abbr", 1.0, 20),
+    _st(8, 4, "calls", 1.0, 20),
+    _st(9, 4, "long", 1.0, 20, 2),
+    _st(10, 4, "mix", 1.0, 20, 2),
+    _st(11, 4, "mix", 1.0, 21, 2),
+    _st(12, 4, "mix", 1.0, 23, 2),
+    _st(13, 4, "mix", 1.0, 25, 2),
 ]
-COPY_U3_LAST = 6           # poslední krok U3 (normální mezery, krátká slova)
-COPY_SESSIONS = 2          # rozhodnutí z posledních 2 sezení na kroku
-COPY_UP_ACC = 0.9          # obě ≥ 90 % po zarovnání → další krok
-COPY_EASE_ACC = 0.75       # obě < 75 % → krok zpět
-COPY_U4_ACC = 0.9          # U3 → U4 na posledním kroku
-COPY_DRIFT_MAX = 1         # skluz „stabilní“ = během lekce neujíždí o víc než 1 znak
-COPY_U5_ACC = 0.9          # M8: U4 → U5 na posledním kroku (25 WPM) …
-COPY_U5_WORDS = 0.9        # … a celá slova ≥ 90 % (R1 kap. 8)
+COPY_U3_LAST = 6           # the last step of U3 (normal gaps, short words)
+COPY_SESSIONS = 2          # decision from the last 2 sessions on a step
+COPY_UP_ACC = 0.9          # both ≥ 90 % after alignment → next step
+COPY_EASE_ACC = 0.75       # both < 75 % → a step back
+COPY_U4_ACC = 0.9          # U3 → U4 on the last step
+COPY_DRIFT_MAX = 1         # lag "stable" = does not run away by more than 1 character during a lesson
+COPY_U5_ACC = 0.9          # M8: U4 → U5 on the last step (25 WPM) …
+COPY_U5_WORDS = 0.9        # … and whole words ≥ 90 % (R1 ch. 8)
 COPY_U5_WPM = 25
-COPY_DRIFT_MAX_U4 = 3      # v U4 je skluz o slovo žádoucí, jen nesmí dál růst
-KOCH = "KMURESNAPTLWI.JZ=FOY,VG5/Q92H38B?47C1D60X'-:()\"@+&!"  # pořadí jako web/js/charset.js
+COPY_DRIFT_MAX_U4 = 3      # in U4 a lag of a word is desirable, it just must not keep growing
+KOCH = "KMURESNAPTLWI.JZ=FOY,VG5/Q92H38B?47C1D60X'-:()\"@+&!"  # order as in web/js/charset.js
 
 
-def fmt_num(x):
-    return str(round(x, 1)).replace(".", ",").removesuffix(",0")
+def step_name(st):
+    """Translated name of a copy-behind step (by its content)."""
+    return t(f"coach.content.{st['content']}")
 
 
 def _copy(r):
@@ -613,7 +596,7 @@ def step_of(r):
 
 
 def copy_summary(part):
-    """Lekce ve skluzu jednoho sezení → {n, acc, lagCh, lagMs, drift, step, full}."""
+    """Copy-behind lessons of one session → {n, acc, lagCh, lagMs, drift, step, full}."""
     n = sum(r.get("trials") or 0 for r in part)
     if not n:
         return None
@@ -642,11 +625,11 @@ def copy_summary(part):
 
 
 def copy_sessions(lessons, step=None):
-    """Souhrny sezení ve skluzu, nejnovější první. Sezení jen s lekcemi po znacích se přeskočí.
-    S krokem: řada končí sezením, kde byl skluz jen na jiném kroku; sezení s < 60 znaky se přeskočí."""
+    """Summaries of copy-behind sessions, newest first. Sessions with character lessons only are skipped.
+    With a step: the series ends with a session where copy behind was only on another step; sessions with < 60 characters are skipped."""
     out = []
     for s in reversed(sessions_of(lessons)):
-        cp = [r for r in s if mode_of(r) == "skluz"]
+        cp = [r for r in s if mode_of(r) == MODE_COPY]
         if not cp:
             continue
         part = [r for r in cp if step is None or step_of(r) == step]
@@ -664,73 +647,73 @@ def copy_u4_ok(sm):
 
 
 def copy_u5_ok(sm):
-    """U4 → U5 (M8): poslední krok, ≥ 25 WPM, ≥ 90 % po zarovnání, celá slova ≥ 90 %, skluz neujíždí."""
+    """U4 → U5 (M8): last step, ≥ 25 WPM, ≥ 90 % after alignment, whole words ≥ 90 %, the lag does not run away."""
     return (sm["step"] == len(COPY_STEPS) and sm["wpm"] >= COPY_U5_WPM and sm["acc"] >= COPY_U5_ACC - 1e-9
             and sm["words"] is not None and sm["words"] >= COPY_U5_WORDS - 1e-9
             and (sm["drift"] is None or sm["drift"] <= COPY_DRIFT_MAX_U4))
 
 
 def mastered_chars(lessons):
-    """Zvládnuté znaky (≥ 90 % z ≥ 5 pokusů v posledních 20 lekcích po znacích) v Kochově pořadí."""
-    t = char_table(znak_only(lessons)[-LEVEL_WINDOW:])
-    return [c for c in KOCH if c in t and t[c][0] >= CHAR_MIN_N and t[c][1] / t[c][0] >= CHAR_ACC - 1e-9]
+    """Mastered characters (≥ 90 % of ≥ 5 trials in the last 20 character lessons) in Koch order."""
+    tab = char_table(char_lessons(lessons)[-LEVEL_WINDOW:])
+    return [c for c in KOCH if c in tab and tab[c][0] >= CHAR_MIN_N and tab[c][1] / tab[c][0] >= CHAR_ACC - 1e-9]
 
 
 def copy_advice(lessons, ulevel):
-    """Krok žebříku skluzu pro další lekci. Vrací {available, step, of, content, gapX, name, chars, change, next}."""
-    cps = [r for r in lessons if mode_of(r) == "skluz"]
+    """Ladder step of copy behind for the next lesson. Returns {available, step, of, content, gapX, name, chars, change, next}."""
+    cps = [r for r in lessons if mode_of(r) == MODE_COPY]
     step = step_of(cps[-1]) if cps else 1
     ses = copy_sessions(lessons, step)
     change = None
     if len(ses) >= COPY_SESSIONS:
         a, b = ses[0], ses[1]
-        pct = f"{round(b['acc'] * 100)} % a {round(a['acc'] * 100)} %"
+        pct = t("coach.pctPair", a=round(b["acc"] * 100), b=round(a["acc"] * 100))
         if (a["acc"] >= COPY_UP_ACC - 1e-9 and b["acc"] >= COPY_UP_ACC - 1e-9 and step < len(COPY_STEPS)
-                and COPY_STEPS[step]["ulevel"] <= ulevel):  # do U4 (krok 7) až po dosažení U4
+                and COPY_STEPS[step]["ulevel"] <= ulevel):  # into U4 (step 7) only after reaching U4
             change = {"kind": "up", "from": step, "to": step + 1,
-                      "why": f"Dvě sezení ≥ {round(COPY_UP_ACC * 100)} % ({pct}) – další krok."}
+                      "why": t("coach.copy.up", acc=round(COPY_UP_ACC * 100), pct=pct)}
         elif a["acc"] < COPY_EASE_ACC and b["acc"] < COPY_EASE_ACC and step > 1:
             change = {"kind": "ease", "from": step, "to": step - 1,
-                      "why": f"Dvě sezení pod {round(COPY_EASE_ACC * 100)} % ({pct}) – krok zpět, ať je čas na upevnění."}
+                      "why": t("coach.copy.ease", acc=round(COPY_EASE_ACC * 100), pct=pct)}
     if change:
         step = change["to"]
     st = COPY_STEPS[step - 1]
-    gap = "normální mezera mezi slovy" if st["gapX"] <= 1 else f"mezera mezi slovy {fmt_num(st['gapX'])}×"
+    name = step_name(st)
+    gap = t("coach.copy.gapNormal") if st["gapX"] <= 1 else t("coach.copy.gapX", x=fmt_num(st["gapX"]))
     if change:
-        change["text"] = (f"Příjem ve skluzu: krok {change['from']} → {step} ({st['name']}, {gap}"
-                          + (f", {st['wpm']} WPM" if st["wpm"] else "") + ").")
+        change["text"] = (t("coach.copy.changed", a=change["from"], b=step, name=name, gap=gap)
+                          + (t("coach.copy.changedWpm", wpm=st["wpm"]) if st["wpm"] else "") + ").")
     if step == COPY_U3_LAST and ulevel < 4:
-        nxt = (f"Poslední krok U3 – po {COPY_SESSIONS} sezeních ≥ {round(COPY_U4_ACC * 100)} % se stabilním skluzem "
-               "je hotová úroveň U3 a otevře se U4 (zkratky, Q-kódy, volací znaky, 21–25 WPM).")
+        nxt = t("coach.copy.nextU3Last", n=COPY_SESSIONS, acc=round(COPY_U4_ACC * 100))
     elif step == len(COPY_STEPS) and ulevel >= 5:
-        nxt = "Úroveň U4 je hotová. Věty, QSO a rušení (U5) připravujeme – tento krok slouží k udržování."
+        nxt = t("coach.copy.nextU4Done")
     elif step == len(COPY_STEPS):
-        nxt = (f"Poslední krok U4 – po {COPY_SESSIONS} sezeních ≥ {round(COPY_U5_ACC * 100)} % a celých slovech "
-               f"≥ {round(COPY_U5_WORDS * 100)} % na {COPY_U5_WPM} WPM je hotová úroveň U4.")
+        nxt = t("coach.copy.nextU4Last", n=COPY_SESSIONS, acc=round(COPY_U5_ACC * 100), words=round(COPY_U5_WORDS * 100),
+                wpm=COPY_U5_WPM)
     elif step < len(COPY_STEPS):
-        nxt = (f"Další krok po {COPY_SESSIONS} sezeních ≥ {round(COPY_UP_ACC * 100)} % na tomto kroku "
-               f"(zatím {min(len(ses) if not change else 0, COPY_SESSIONS)} z {COPY_SESSIONS}).")
+        nxt = t("coach.copy.next", n=COPY_SESSIONS, acc=round(COPY_UP_ACC * 100),
+                done=min(len(ses) if not change else 0, COPY_SESSIONS))
     return {"available": ulevel >= 3, "step": step, "of": len(COPY_STEPS), "content": st["content"],
-            "gapX": st["gapX"], "name": st["name"], "gap": gap, "chars": mastered_chars(lessons),
+            "gapX": st["gapX"], "name": name, "gap": gap, "chars": mastered_chars(lessons),
             "wpm": st["wpm"], "markLag": st["markLag"], "ulevel": st["ulevel"],
             "change": change, "next": nxt, "last": ses[0] if ses and not change else None}
 
 
-# ================= dashboard pokroku (M5) =================
-# Pravidelnost vs. pokrok. Dny se počítají v místním čase (uživatelé v ČR); klient čas nepředává.
+# ================= progress dashboard (M5) =================
+# Regularity vs. progress. Days are counted in local time (users in Czechia); the client does not send its time.
 TZ_NAME = "Europe/Prague"
-DASH_DAYS = 28             # kalendář pravidelnosti
-DASH_WEEKS = 8             # týdny: minuty, dny, přidané znaky
-DASH_SESSIONS = 30         # průběh po sezeních
-REGULAR_DAYS = 4           # „pravidelný“ týden = trénink aspoň 4 dny
-TARGET_SHARE = 0.8         # den splnil cíl při ≥ 80 % denního cíle minut
+DASH_DAYS = 28             # regularity calendar
+DASH_WEEKS = 8             # weeks: minutes, days, added characters
+DASH_SESSIONS = 30         # course by sessions
+REGULAR_DAYS = 4           # a "regular" week = training on at least 4 days
+TARGET_SHARE = 0.8         # a day met the goal at ≥ 80 % of the daily goal of minutes
 
 
 def _tz():
     from zoneinfo import ZoneInfo
     try:
         return ZoneInfo(TZ_NAME)
-    except Exception:  # bez tzdata: UTC (jen posun hranice dne)
+    except Exception:  # without tzdata: UTC (only shifts the day boundary)
         from datetime import timezone
         return timezone.utc
 
@@ -744,19 +727,19 @@ def _r(x, nd=3):
 
 
 def dashboard(lessons, level, prefs, now_ms):
-    """Lekce (nejstarší první, pole at/level/dur_s/trials/acc/ttr/detail) → data pro kartu Pokrok."""
+    """Lessons (oldest first, fields at/level/dur_s/trials/acc/ttr/detail) → data for the Progress card."""
     from datetime import timedelta
     tz = _tz()
     today = _local_date(now_ms, tz)
     target = (prefs or {}).get("dayMin") or DEFAULT_DAY_MIN
 
-    # minuty po dnech
+    # minutes by days
     per_day = {}
     for r in lessons:
-        t = _ms(r["at"])
-        if t is None:
+        ms = _ms(r["at"])
+        if ms is None:
             continue
-        d = _local_date(t, tz)
+        d = _local_date(ms, tz)
         x = per_day.setdefault(d, [0.0, 0])
         x[0] += (r.get("dur_s") or 0) / 60
         x[1] += 1
@@ -768,27 +751,27 @@ def dashboard(lessons, level, prefs, now_ms):
                      "goal": m >= target * TARGET_SHARE - 1e-9 and m > 0})
     last14 = days[-14:]
     streak = 0
-    for x in reversed(days if days[-1]["n"] else days[:-1]):  # dnešek ještě může přijít
+    for x in reversed(days if days[-1]["n"] else days[:-1]):  # today may still come
         if not x["n"]:
             break
         streak += 1
     first = min(per_day) if per_day else today
     regularity = {
-        "span14": min(14, (today - first).days + 1),  # kolik z posledních 14 dní už uživatel trénuje
+        "span14": min(14, (today - first).days + 1),  # how many of the last 14 days the user has been training
         "days14": sum(1 for x in last14 if x["n"]), "goal14": sum(1 for x in last14 if x["goal"]),
         "min7": round(sum(x["min"] for x in days[-7:]) / 7, 1), "target": target, "streak": streak,
     }
 
-    # týdny (pondělí): minuty, aktivní dny, přidané znaky
+    # weeks (Monday): minutes, active days, added characters
     def week_of(d):
         return d - timedelta(days=d.weekday())
     seq = [(r, _ms(r["at"])) for r in lessons]
-    seq = [(r, t) for r, t in seq if t is not None]
-    added_at = []  # datum lekce, po které přibyl znak
-    for i, (r, t) in enumerate(seq):
+    seq = [(r, ms) for r, ms in seq if ms is not None]
+    added_at = []  # date of a lesson after which a character was added
+    for i, (r, ms) in enumerate(seq):
         nxt = seq[i + 1][0]["level"] if i + 1 < len(seq) else level
         if nxt == (r.get("level") or 0) + 1:
-            added_at.append(_local_date(t, tz))
+            added_at.append(_local_date(ms, tz))
     w0 = week_of(today)
     weeks = []
     for i in range(DASH_WEEKS - 1, -1, -1):
@@ -798,18 +781,18 @@ def dashboard(lessons, level, prefs, now_ms):
         weeks.append({"w": ws.isoformat(), "min": round(sum(per_day[d][0] for d in ds), 1), "days": len(ds),
                       "added": sum(1 for d in added_at if ws <= d < we), "current": i == 0})
 
-    # průběh po sezeních
+    # course by sessions
     ses_out = []
-    prev = None  # poslední lekce po znacích z dřívějších sezení (rozcvička se srovnává s ní)
+    prev = None  # the last character lesson from earlier sessions (the warm-up is compared with it)
     for s in sessions_of(lessons):
-        zn = znak_only(s)
-        cp = [r for r in s if mode_of(r) == "skluz"]
+        zn = char_lessons(s)
+        cp = [r for r in s if mode_of(r) == MODE_COPY]
         sm = session_summary(zn) if zn else None
-        cs = copy_summary(cp) if cp else None  # M7: skluz zvlášť (jiný význam než TTR)
+        cs = copy_summary(cp) if cp else None  # M7: copy behind separately (a different meaning than TTR)
         if not sm and not cs:
             continue
         w = (_detail(zn[0]).get("warmup") or {}) if zn else {}
-        fat = sum(1 for r in s if (_detail(r).get("fatigue") or {}).get("events"))  # M8: i ve skluzu
+        fat = sum(1 for r in s if (_detail(r).get("fatigue") or {}).get("events"))  # M8: in copy behind too
         ses_out.append({
             "at": s[-1]["at"], "chars": max(r.get("level") or 0 for r in s),
             "acc": _r(sm["acc"]) if sm else None, "ttr": sm["ttr"] if sm else None,
@@ -825,7 +808,7 @@ def dashboard(lessons, level, prefs, now_ms):
             prev = zn[-1]
     ses_out = ses_out[-DASH_SESSIONS:]
 
-    # zapamatování: rozcvička vs. konec předchozího sezení (posledních 5 sezení s rozcvičkou)
+    # retention: warm-up vs. end of the previous session (the last 5 sessions with a warm-up)
     wr = [s for s in ses_out if s["warm"] is not None][-5:]
     retention = None
     if wr:
@@ -840,7 +823,7 @@ def dashboard(lessons, level, prefs, now_ms):
 
 
 def insight(weeks, reg, retention):
-    """Krátké vysvětlení vztahu pravidelnosti a pokroku – o úkolu, ne o osobě (R1 kap. 5)."""
+    """A short explanation of how regularity relates to progress – about the task, not the person (R1 ch. 5)."""
     done = [w for w in weeks if not w["current"] and w["min"] > 0]
     reg_w = [w for w in done if w["days"] >= REGULAR_DAYS]
     irr_w = [w for w in done if w["days"] < REGULAR_DAYS]
@@ -848,17 +831,15 @@ def insight(weeks, reg, retention):
     if reg_w and irr_w and sum(w["added"] for w in done) > 0:
         a = sum(w["added"] for w in reg_w) / len(reg_w)
         b = sum(w["added"] for w in irr_w) / len(irr_w)
-        def cz(x):
-            return f"{x:.1f}".replace(".", ",")
-        out.append(f"V týdnech s tréninkem aspoň {REGULAR_DAYS} dny přibylo v průměru "
-                   f"{cz(a)} znaku za týden, v ostatních týdnech {cz(b)}.")
+        def one_decimal(x):
+            return f"{x:.1f}".replace(".", t("fmt.decimal"))
+        out.append(t("coach.insight.weeks", days=REGULAR_DAYS, a=one_decimal(a), b=one_decimal(b)))
     if retention and retention["keep"] is not None:
         k = round(retention["keep"] * 100)
-        out.append(f"Po pauze držíš {round(retention['warm'] * 100)} % (konec předchozího sezení "
-                   f"{round(retention['prevEnd'] * 100)} %)" + (" – znaky si dobře pamatuješ." if k >= 95 else
-                   " – mírný pokles po pauze je normální a není to regres; rozcvička ho srovná."))
+        out.append(t("coach.insight.retention", warm=round(retention["warm"] * 100), prev=round(retention["prevEnd"] * 100))
+                   + (t("coach.insight.retentionGood") if k >= 95 else t("coach.insight.retentionDrop")))
     if reg["span14"] >= 4 and reg["days14"] < reg["span14"] * 0.5:
-        out.append("Pro rychlejší pokrok pomáhá trénovat častěji a kratčeji – ideálně denně, klidně 2× 10–15 min.")
+        out.append(t("coach.insight.oftener"))
     elif reg["goal14"] >= 10:
-        out.append("Pravidelnost je výborná – právě ta dělá většinu pokroku.")
+        out.append(t("coach.insight.regular"))
     return out

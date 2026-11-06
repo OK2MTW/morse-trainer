@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Testy příjmu ve skluzu (Python port copy.js, M7 + M8): zarovnání, skluz, výsledky slov, únava."""
+"""Tests of copy behind (Python port of copy.js, M7 + M8): alignment, lag, word results, fatigue."""
 import random
 import re
 import unittest
@@ -25,7 +25,7 @@ class TestAlign(unittest.TestCase):
         self.assertEqual(sc['acc'], 1)
 
     def test_missing_char_does_not_shift(self):
-        # vynechaný znak nesmí rozhodit hodnocení všech dalších
+        # a missed character must not spoil the scoring of all the following ones
         sent, typed = list('THEDOGRUNS'), list('THEDGRUNS')
         ops = C.align(sent, typed)
         self.assertEqual(ops_str(ops), '====-=====')
@@ -89,7 +89,7 @@ class TestLag(unittest.TestCase):
         chars = C.stream(words, char_ms=400, gap_ms=200, word_ms=1000)
         ends = [c['end'] for c in chars]  # 400, 1000, 1600, 3200, 3800
         self.assertEqual(ends, [400, 1000, 1600, 3200, 3800])
-        # písař 1 znak pozadu: znak i píše 100 ms po konci znaku i+1
+        # a typist 1 character behind: types character i 100 ms after the end of character i+1
         typed = [{'ch': c['ch'], 't': (ends[i + 1] if i + 1 < len(ends) else ends[i] + 600) + 100}
                  for i, c in enumerate(chars)]
         ev = C.evaluate(words, chars, typed)
@@ -99,7 +99,7 @@ class TestLag(unittest.TestCase):
         s = C.lag_summary(ev['lags'])
         self.assertEqual(s['lagCh'], 1)
         self.assertEqual(s['lagChMax'], 1)
-        self.assertIsNone(s['drift'])  # málo vzorků
+        self.assertIsNone(s['drift'])  # few samples
 
     def test_drift(self):
         samples = [{'s': i, 'ms': 0, 'ch': 0 if i < 10 else 2} for i in range(30)]
@@ -122,7 +122,7 @@ class TestWordLag(unittest.TestCase):
         words = ['ABC', 'DE', 'FG']
         chars = C.stream(words, char_ms=400, gap_ms=200, word_ms=1000)
         ends = [c['end'] for c in chars]  # ABC: 400,1000,1600; DE: 3200,3800; FG: 5400,6000
-        # slovo k napíše celé až po doznění slova k+1 (skluz celého slova)
+        # types word k as a whole only after word k+1 has finished (whole-word lag)
         wend = {0: 1600, 1: 3800, 2: 6000}
         typed = [{'ch': c['ch'], 't': wend.get(c['w'] + 1, 6600) + 50 + i} for i, c in enumerate(chars)]
         ev = C.evaluate(words, chars, typed)
@@ -155,7 +155,7 @@ class TestCopyFatigue(unittest.TestCase):
     def test_acc_drop_after_minute(self):
         f = C.CopyFatigue()
         r = self.feed(f, [sc(19)] * 3 + [sc(14, d=2)] * 4)
-        # základ 95 %, okno 70 % → signál; > 60 s až na 3. řádku okna (2 × 25 s = 50 s nestačí)
+        # baseline 95 %, window 70 % → signal; > 60 s only on the 3rd line of the window (2 × 25 s = 50 s is not enough)
         self.assertEqual([x['propose'] for x in r], [False] * 5 + [True, True])
         self.assertEqual(r[-1]['kind'], 'acc')
 
@@ -166,7 +166,7 @@ class TestCopyFatigue(unittest.TestCase):
 
     def test_miss_up(self):
         f = C.CopyFatigue()
-        r = self.feed(f, [sc(18, d=0)] * 3 + [sc(17, d=3)] * 5)  # chybí 0 % → 15 %
+        r = self.feed(f, [sc(18, d=0)] * 3 + [sc(17, d=3)] * 5)  # missing 0 % → 15 %
         self.assertTrue(r[-1]['propose'])
         self.assertEqual(r[-1]['kind'], 'miss')
 
@@ -178,7 +178,7 @@ class TestCopyFatigue(unittest.TestCase):
         first = next(k for k, x in enumerate(r) if x['propose'])
         self.assertGreaterEqual(100 + 25 * first, 75 + C.FAT_SNOOZE_S)
         f.reset()
-        self.assertFalse(f.add(sc(10), 400, 425)['propose'])  # po pauze nové okno
+        self.assertFalse(f.add(sc(10), 400, 425)['propose'])  # a new window after a pause
 
 
 class TestJsShape(unittest.TestCase):

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: EUPL-1.2
-# Hrubá kontrola JS (na Pi není JS engine): spustit `python3 tests/jscheck.py web/js/*.js`.
-# vyvážené závorky (mimo řetězce/komentáře/šablony), importovaná jména existují v exportech.
+# Rough JS check (there is no JS engine on the Pi): run `python3 tests/jscheck.py web/js/*.js`.
+# Balanced brackets (outside strings/comments/templates), imported names exist among the exports.
 import re, sys, os
 def strip(src):
     out=[];i=0;n=len(src);stack=[]
@@ -19,6 +19,7 @@ def strip(src):
             while True:
                 if src[j]=='\\': j+=2; continue
                 if src.startswith('${',j): depth+=1; j+=2; continue
+                if src[j]=='{' and depth: depth+=1; j+=1; continue
                 if src[j]=='}' and depth: depth-=1; j+=1; continue
                 if src[j]=='`' and not depth: break
                 j+=1
@@ -42,13 +43,13 @@ for f in sys.argv[1:]:
     for k,c in enumerate(s):
         if c in '([{': st.append((c,k))
         elif c in ')]}':
-            if not st or st[-1][0]!=pairs[c]: print(f,'nesoulad',c,'u',s[max(0,k-60):k]); ok=False; break
+            if not st or st[-1][0]!=pairs[c]: print(f,'mismatch',c,'at',s[max(0,k-60):k]); ok=False; break
             st.pop()
-    if st and ok: print(f,'neuzavřeno',st[-1]); ok=False
+    if st and ok: print(f,'unclosed',st[-1]); ok=False
     src=open(f).read()
     for m in re.finditer(r"import\s*\{([^}]*)\}\s*from\s*'(\.[^']*)'",src):
         tgt=os.path.normpath(os.path.join(os.path.dirname(f),m.group(2))); t=open(tgt).read()
         for name in [x.strip().split(' as ')[0] for x in m.group(1).split(',') if x.strip()]:
             if not re.search(r'export\s+(async\s+)?(function|const|class|let)\s+'+name+r'\b',t) and not re.search(r'export\s*\{[^}]*\b'+name+r'\b',t):
-                print(f,'chybí export',name,'v',tgt); ok=False
-print('OK' if ok else 'CHYBA')
+                print(f,'missing export',name,'in',tgt); ok=False
+print('OK' if ok else 'ERROR')

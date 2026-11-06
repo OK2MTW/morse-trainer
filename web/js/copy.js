@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Příjem ve skluzu (M7, M8) – čistá logika bez DOM: zarovnání napsaného textu k vyslanému, skluz (ve znacích
-// i slovech), výsledky slov, únava po řádcích. Python port: tests/copy.py (testy hlídají shodu konstant).
-// Návrh: docs/requirements.md „Návrh M7“ a „Návrh M8“.
+// Copy behind (M7, M8) – pure logic without DOM: alignment of the typed text to the sent one, lag (in characters
+// and words), word results, fatigue per line. Python port: tests/copy.py (tests check that the constants match).
+// Design: docs/requirements.md, sections on M7 and M8.
 
-export const ROUND_ITEMS = 6;        // položek (skupin/slov) v jednom řádku
-export const ROUND_TAIL_MS = 3000;   // řádek končí 3 s po posledním tónu (nejméně 2× mezera mezi slovy)
-export const COPY_MIN_CHARS = 60;    // sezení se hodnotí od 60 vyslaných znaků (shodně se server/coach.py)
-// M8: únava ve skluzu – vyhodnocení po řádku (řádek je přirozená zastávka, proud se nepřerušuje)
-export const FAT_BASE_ROUNDS = 3;    // základ = první 3 řádky lekce
-export const FAT_WIN_ROUNDS = 2;     // aktuální stav = poslední 2 řádky
-export const FAT_ACC_DROP = 0.1;     // úspěšnost o ≥ 10 p. b. nižší …
-export const FAT_ACC_FLOOR = 0.8;    // … a pod 80 % (jako FatigueMonitor v M5)
-export const FAT_MISS_UP = 0.1;      // nebo podíl chybějících znaků o ≥ 10 p. b. vyšší (ztráta proudu)
-export const FAT_HOLD_S = 60;        // signál musí trvat > 1 min čistého času
-export const FAT_SNOOZE_S = 180;     // po „pokračovat“ další návrh nejdřív za 3 min
+export const ROUND_ITEMS = 6;        // items (groups/words) in one line
+export const ROUND_TAIL_MS = 3000;   // a line ends 3 s after the last tone (at least 2× the word gap)
+export const COPY_MIN_CHARS = 60;    // a session is evaluated from 60 sent characters (same as server/coach.py)
+// M8: fatigue in copy behind – evaluated per line (a line is a natural stop, the stream is not interrupted)
+export const FAT_BASE_ROUNDS = 3;    // baseline = the first 3 lines of the lesson
+export const FAT_WIN_ROUNDS = 2;     // current state = the last 2 lines
+export const FAT_ACC_DROP = 0.1;     // accuracy ≥ 10 points lower …
+export const FAT_ACC_FLOOR = 0.8;    // … and below 80 % (like FatigueMonitor in M5)
+export const FAT_MISS_UP = 0.1;      // or the share of missing characters ≥ 10 points higher (losing the stream)
+export const FAT_HOLD_S = 60;        // the signal must last > 1 min of net time
+export const FAT_SNOOZE_S = 180;     // after "continue" the next proposal at the earliest in 3 min
 
-// Pořadí při shodné ceně cesty zpět: správně > záměna > chybí > navíc (deterministické hodnocení).
+// Order on equal backtracking cost: correct > substitution > missing > extra (deterministic scoring).
 /**
- * Zarovná napsané znaky k vyslaným (Levenshtein). sent, typed = pole znaků (bez mezer).
- * Vrací operace [{op: 'ok'|'sub'|'del'|'ins', s: index vyslaného|null, t: index napsaného|null}] v pořadí textu.
- * 'del' = vyslaný znak chybí v zápisu, 'ins' = napsaný znak navíc.
+ * Aligns typed characters to the sent ones (Levenshtein). sent, typed = arrays of characters (without spaces).
+ * Returns operations [{op: 'ok'|'sub'|'del'|'ins', s: sent index|null, t: typed index|null}] in text order.
+ * 'del' = a sent character is missing in the copy, 'ins' = an extra typed character.
  */
 export function align(sent, typed) {
   const n = sent.length;
@@ -55,7 +55,7 @@ export function align(sent, typed) {
   return ops.reverse();
 }
 
-/** Počty operací, úspěšnost po zarovnání a záměny {`S→H`: n}. */
+/** Operation counts, accuracy after alignment and confusions {`S→H`: n}. */
 export function score(ops, sent, typed) {
   const c = { ok: 0, sub: 0, del: 0, ins: 0 };
   const conf = {};
@@ -77,7 +77,7 @@ export function median(arr) {
   return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2;
 }
 
-/** Percentil p (0–1), nejbližší hodnota zdola (bez interpolace – stejné v Pythonu). */
+/** Percentile p (0–1), the nearest value from below (no interpolation – the same in Python). */
 export function percentile(arr, p) {
   if (!arr.length) return null;
   const s = [...arr].sort((a, b) => a - b);
@@ -85,12 +85,12 @@ export function percentile(arr, p) {
 }
 
 /**
- * Skluz pro spárované znaky (ok i záměna). ends[i] = konec tónu vyslaného znaku i (ms, performance.now),
- * times[j] = čas stisku napsaného znaku j. Vrací [{s, ms, ch}] – ms za koncem znaku, ch = kolik dalších
- * vyslaných znaků už dozvučelo.
+ * Lag for paired characters (ok and substitution). ends[i] = end of the tone of sent character i (ms, performance.now),
+ * times[j] = time of the press of typed character j. Returns [{s, ms, ch}] – ms after the end of the character,
+ * ch = how many further sent characters have already finished.
  */
 export function lagSamples(ops, ends, times, wordOf = null) {
-  // M8: wordOf (slovo každého vyslaného znaku) → i skluz ve slovech: kolik dalších slov už dozvučelo
+  // M8: wordOf (word of each sent character) → lag in words too: how many further words have already finished
   const wEnd = [];
   if (wordOf) wordOf.forEach((w, i) => { wEnd[w] = ends[i]; });
   const out = [];
@@ -112,7 +112,7 @@ export function lagSamples(ops, ends, times, wordOf = null) {
 
 const r1 = (x) => (x === null ? null : Math.round(x * 10) / 10);
 
-/** Souhrn skluzu: medián/p90 v ms a znacích, max. znaků, drift (poslední třetina − první, ve znacích). */
+/** Lag summary: median/p90 in ms and characters, max. characters, drift (last third − first, in characters). */
 export function lagSummary(samples) {
   if (!samples.length) return { lagMs: null, lagP90: null, lagCh: null, lagChP90: null, lagChMax: null, drift: null, lagW: null, lagWP90: null };
   const ms = samples.map((x) => x.ms);
@@ -132,14 +132,14 @@ function wordLag(samples) {
 }
 
 /**
- * Výsledky slov: words = pole slov (řetězce), ops nad spojenými znaky. Slovo je správně, když jsou správně
- * všechny jeho znaky a uvnitř slova nic navíc. Vrací pole true/false.
+ * Word results: words = array of words (strings), ops over the joined characters. A word is correct when all its
+ * characters are correct and there is nothing extra inside the word. Returns an array of true/false.
  */
 export function wordResults(words, ops) {
   const wordOf = [];
   words.forEach((wd, k) => { for (let i = 0; i < wd.length; i++) wordOf.push(k); });
   const ok = words.map(() => true);
-  // slovo dalšího vyslaného znaku za každou operací (odzadu)
+  // word of the next sent character after each operation (from the end)
   const nextWord = new Array(ops.length).fill(-1);
   for (let k = ops.length - 1, nw = -1; k >= 0; k--) {
     nextWord[k] = nw;
@@ -151,15 +151,15 @@ export function wordResults(words, ops) {
       lastWord = wordOf[o.s];
       if (o.op !== 'ok') ok[lastWord] = false;
     } else if (lastWord >= 0 && nextWord[k] === lastWord) {
-      ok[lastWord] = false; // navíc uvnitř slova (na hranici slov se nepočítá ani jednomu)
+      ok[lastWord] = false; // extra inside a word (on a word boundary it counts against neither)
     }
   });
   return ok;
 }
 
 /**
- * Řádek → vstupy pro hodnocení. chars = [{ch, w, end}] z playStream, typed = [{ch, t}] (bez mezer).
- * Vrací {ops, sc, lags, words(ok[])} – použije se po řádku i pro průběžné značky slov.
+ * Line → scoring inputs. chars = [{ch, w, end}] from playStream, typed = [{ch, t}] (without spaces).
+ * Returns {ops, sc, lags, words(ok[])} – used after a line and for the running word marks.
  */
 export function evaluate(words, chars, typed) {
   const sent = chars.map((c) => c.ch);
@@ -172,7 +172,7 @@ export function evaluate(words, chars, typed) {
   };
 }
 
-/** Souhrn lekce z řádků [{words, chars, typed, ev}] → detail.copy (bez kroku a obsahu – doplní volající). */
+/** Lesson summary from lines [{words, chars, typed, ev}] → detail.copy (without step and content – added by the caller). */
 export function lessonSummary(rounds) {
   const c = { ok: 0, sub: 0, del: 0, ins: 0, n: 0 };
   const conf = {};
@@ -194,7 +194,7 @@ export function lessonSummary(rounds) {
   };
 }
 
-// ---------- únava ve skluzu (M8) ----------
+// ---------- fatigue in copy behind (M8) ----------
 function roundStats(list) {
   let ok = 0; let n = 0; let ins = 0; let del = 0;
   for (const x of list) { ok += x.ok; n += x.n; ins += x.ins; del += x.del; }
@@ -202,9 +202,9 @@ function roundStats(list) {
 }
 
 /**
- * Hlídání únavy v lekci ve skluzu – po každém řádku add(sc, startS, endS): sc = skóre řádku {ok, n, ins, del},
- * startS/endS = čistý čas lekce na začátku a konci řádku. Vrací {propose, kind ('acc'|'miss'|null), accDrop, missUp}.
- * Skluz se jako únava nebere (v U4 je delší skluz cílem). reset() po pauze, snooze() po „pokračovat“.
+ * Fatigue watch in a copy-behind lesson – after each line add(sc, startS, endS): sc = line score {ok, n, ins, del},
+ * startS/endS = net lesson time at the start and end of the line. Returns {propose, kind ('acc'|'miss'|null), accDrop, missUp}.
+ * Lag is not taken as fatigue (in U4 a longer lag is the goal). reset() after a pause, snooze() after "continue".
  */
 export class CopyFatigue {
   constructor() {
@@ -238,7 +238,7 @@ export class CopyFatigue {
     const missTired = missUp >= FAT_MISS_UP - 1e-9;
     this.last = { tired: accTired || missTired, accDrop, missUp };
     if (!this.last.tired) { this.since = null; return none; }
-    if (this.since === null) this.since = this.win[0].startS; // signál platí za celé okno
+    if (this.since === null) this.since = this.win[0].startS; // the signal applies for the whole window
     const propose = endS - this.since > FAT_HOLD_S && endS >= this.snoozeUntil;
     return { propose, kind: accTired ? 'acc' : 'miss', accDrop, missUp };
   }

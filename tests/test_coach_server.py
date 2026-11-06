@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Testy serverového trenéra (server/coach.py): dotazník → archetyp, modifikátory, preference."""
+"""Tests of the server coach (server/coach.py): questionnaire → archetype, modifiers, preferences."""
 import unittest
 
 from server import coach as C
+from server import i18n
 
 BASE = {"age": "adult", "exp": "none", "time": "10to20", "rhythm": "daily", "pace": "normal", "music": "no",
         "reading": "easy", "typing": "easy", "focus": "mid", "hearing": "ok", "errors": "fine", "numbers": "basic"}
@@ -21,23 +22,26 @@ class TestQuestionnaire(unittest.TestCase):
         for q in C.QUESTIONS:
             self.assertGreaterEqual(len(q["options"]), 2)
             if q.get("when"):
-                self.assertIn(q["when"][0], ids[:ids.index(q["id"])])  # podmínka jen na dřívější otázku
+                self.assertIn(q["when"][0], ids[:ids.index(q["id"])])  # a condition only on an earlier question
         self.assertEqual(len(C.ARCHETYPES), 14)
         self.assertEqual(sorted(C.MODIFIERS), [f"M{i}" for i in range(15, 21)])
 
     def test_no_diagnosis_words(self):
-        # v uložených výsledcích nesmí být diagnózy
+        # no diagnoses may be in the stored results
         import json
         txt = json.dumps(prof(reading="hard", typing="hard", focus="short", hearing="hard"), ensure_ascii=False).lower()
         for w in ("dyslex", "adhd", "diagn", "nedoslý", "porucha"):
             self.assertNotIn(w, txt)
-        for m in C.MODIFIERS.values():
-            for w in ("dyslex", "adhd", "diagn"):
-                self.assertNotIn(w, m.lower())
+        for lang in i18n.LANGS:
+            with i18n.use_lang(lang):
+                names = [C.modifier_name(m) for m in C.MODIFIERS]
+            for m in names:
+                for w in ("dyslex", "adhd", "diagn"):
+                    self.assertNotIn(w, m.lower())
 
     def test_clean(self):
         a = C.clean_answers({**BASE, "speed": "fast", "evil": "x", "age": "999"})
-        self.assertNotIn("speed", a)  # podmíněná otázka u nováčka neplatí
+        self.assertNotIn("speed", a)  # a conditional question does not apply to a beginner
         self.assertNotIn("evil", a)
         self.assertNotIn("age", a)
         self.assertEqual(C.clean_answers("x"), {})
@@ -62,9 +66,9 @@ class TestArchetypes(unittest.TestCase):
             self.assertEqual(prof(**kw)["archetype"], z, kw)
 
     def test_priority(self):
-        self.assertEqual(prof(age="senior", exp="active", speed="fast")["archetype"], "Z13")  # zkušenost má přednost
+        self.assertEqual(prof(age="senior", exp="active", speed="fast")["archetype"], "Z13")  # experience wins
         self.assertEqual(prof(age="child", rhythm="weekend")["archetype"], "Z06")
-        self.assertEqual(prof(exp="table", gaps="numpunct")["archetype"], "Z10")  # metoda je větší problém
+        self.assertEqual(prof(exp="table", gaps="numpunct")["archetype"], "Z10")  # the method is the bigger problem
 
     def test_modifiers(self):
         self.assertEqual(prof()["modifiers"], [])
@@ -83,7 +87,7 @@ class TestPrefs(unittest.TestCase):
         self.assertFalse(p["entryTest"])
 
     def test_limits(self):
-        # všechny kombinace: blok ≤ 10 min, rychlost znaku ≥ 12 WPM, fwpm ≤ wpm, denní cíl ≤ 60
+        # all combinations: block ≤ 10 min, character speed ≥ 12 WPM, fwpm ≤ wpm, daily goal ≤ 60
         import itertools
         keys = ["age", "exp", "time", "pace", "focus", "typing"]
         opts = [[o[0] for o in C.QMAP[k]["options"]] for k in keys]
@@ -110,11 +114,11 @@ def les(level, minutes):
 
 class TestCalibration(unittest.TestCase):
     def test_additions(self):
-        lessons = [les(2, 5), les(2, 5), les(3, 5), les(4, 10), les(10, 5)]  # 4 → 10 ruční skok
+        lessons = [les(2, 5), les(2, 5), les(3, 5), les(4, 10), les(10, 5)]  # 4 → 10 manual jump
         adds, mins = C.additions(lessons, 10)
         self.assertEqual(adds, [(2, 10), (3, 5)])
         self.assertEqual(mins[10], 5)
-        # poslední lekce postoupila (pokrok je o 1 výš)
+        # the last lesson advanced (progress is 1 higher)
         adds, _ = C.additions([les(2, 5), les(3, 7)], 4)
         self.assertEqual(adds, [(2, 5), (3, 7)])
 
@@ -127,7 +131,7 @@ class TestCalibration(unittest.TestCase):
         self.assertEqual(e["dayMin"], 30)
 
     def test_data_wins(self):
-        # rychlý žák: 2 znaky po 6 min, i když archetyp čeká pomalý postup
+        # a fast student: 2 characters after 6 min each, although the archetype expects slow progress
         e = C.plan_estimate([les(2, 6), les(3, 6), les(4, 2)], 4, "Z08", {})
         self.assertEqual(e["source"], "data")
         self.assertEqual(e["rate"], 6)
@@ -207,7 +211,7 @@ class TestULevel(unittest.TestCase):
         self.assertEqual(C.computed_ulevel(one, 51), 1)
         two = [L(0, level=51, per=GOOD), L(20, level=51, per=GOOD)]
         self.assertEqual(C.computed_ulevel(two, 51), 2)
-        # bez celé sady ne
+        # not without the full set
         self.assertEqual(C.computed_ulevel([L(0, level=50, per=GOOD), L(20, level=50, per=GOOD)], 50), 1)
 
     def test_u2_weak_char(self):
@@ -221,7 +225,7 @@ class TestULevel(unittest.TestCase):
         ls = [L(0, level=51, per=GOOD), L(20, level=51, per=GOOD, fwpm=20, ttr=550),
               L(40, level=51, per=GOOD, fwpm=20, ttr=580)]
         self.assertEqual(C.computed_ulevel(ls, 51), 3)
-        # mobil má vyšší práh reakce
+        # a phone has a higher reaction threshold
         ls2 = [L(0, level=51, per=GOOD), L(20, level=51, per=GOOD, fwpm=20, ttr=750, device="mobil"),
                L(40, level=51, per=GOOD, fwpm=20, ttr=780, device="mobil")]
         self.assertEqual(C.computed_ulevel(ls2, 51), 3)
@@ -245,7 +249,7 @@ class TestPlateau(unittest.TestCase):
         self.assertEqual(p["sessions"], 3)
         self.assertFalse(p["change"])
         self.assertIn("800", p["process"])
-        self.assertIn("normální", p["text"])
+        self.assertIn("normal", p["text"])
 
     def test_plateau_change_after_five(self):
         ls = [L(h * 20, level=6) for h in range(6)]
@@ -263,10 +267,12 @@ class TestPlateau(unittest.TestCase):
         self.assertIsNone(C.plateau(ls, 7))
 
     def test_feedback_about_task(self):
-        p = C.plateau([L(h * 20, level=6) for h in range(6)], 6)
-        txt = (p["text"] + p["advice"]).lower()
-        for w in ("šikov", "talent", "špatn", "neschop", "lepší než ostatní"):
-            self.assertNotIn(w, txt)
+        for lang in i18n.LANGS:
+            with i18n.use_lang(lang):
+                p = C.plateau([L(h * 20, level=6) for h in range(6)], 6)
+            txt = (p["text"] + p["advice"]).lower()
+            for w in ("šikov", "talent", "špatn", "neschop", "lepší než ostatní", "clever", "bad at", "better than others"):
+                self.assertNotIn(w, txt)
 
 
 class TestDashboard(unittest.TestCase):
@@ -296,7 +302,7 @@ class TestDashboard(unittest.TestCase):
     def test_regularity_and_progress(self):
         ls = []
         lv = 2
-        # 10 dní po sobě (včera … před 10 dny), každý den 2 lekce v jednom sezení, každý druhý den nový znak
+        # 10 days in a row (yesterday … 10 days ago), 2 lessons in one session each day, a new character every other day
         for i in range(10, 0, -1):
             ls.append(self.lesson(i, 16, lv, warm=0.85 if ls else None))
             ls.append(self.lesson(i, 16.25, lv, fatigue=(i == 3)))
@@ -304,7 +310,7 @@ class TestDashboard(unittest.TestCase):
                 lv += 1
         d = C.dashboard(ls, lv, {"dayMin": 20}, self.NOW)
         r = d["regularity"]
-        self.assertEqual(r["streak"], 10)  # dnes zatím nic, série trvá
+        self.assertEqual(r["streak"], 10)  # nothing today yet, the streak lasts
         self.assertEqual(r["days14"], 10)
         self.assertEqual(r["goal14"], 10)  # 2× 10 min ≥ 80 % z 20
         self.assertEqual(sum(w["added"] for w in d["weeks"]), 5)
@@ -313,7 +319,7 @@ class TestDashboard(unittest.TestCase):
         self.assertEqual(d["fatigue14"], 1)
         self.assertEqual(d["retention"]["n"], 5)
         self.assertAlmostEqual(d["retention"]["warm"], 0.85)
-        self.assertTrue(any("pauze" in t for t in d["insight"]))
+        self.assertTrue(any("break" in t for t in d["insight"]))
 
     def test_streak_broken(self):
         ls = [self.lesson(5), self.lesson(1), self.lesson(0, 8)]
@@ -322,7 +328,7 @@ class TestDashboard(unittest.TestCase):
         self.assertEqual(d["days"][-1]["n"], 1)
 
     def test_local_day_boundary(self):
-        # 23:30 UTC = 0:30 místního času další den (CET +1)
+        # 23:30 UTC = 0:30 local time the next day (CET +1)
         from datetime import datetime, timezone
         at = datetime(2026, 11, 3, 23, 30, tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
         r = {**self.lesson(0), "at": at}
@@ -332,32 +338,32 @@ class TestDashboard(unittest.TestCase):
     def test_insight_regular_vs_irregular(self):
         ls = []
         lv = 2
-        for i in range(20, 13, -1):  # pravidelný týden, 3 nové znaky
+        for i in range(20, 13, -1):  # a regular week, 3 new characters
             ls.append(self.lesson(i, 17, lv))
             if i % 2 == 0:
                 lv += 1
-        ls.append(self.lesson(9, 17, lv))  # nepravidelný týden, nic
+        ls.append(self.lesson(9, 17, lv))  # an irregular week, nothing
         d = C.dashboard(ls, lv, {}, self.NOW)
-        self.assertTrue(any(t.startswith("V týdnech") for t in d["insight"]), d["insight"])
+        self.assertTrue(any(t.startswith("In weeks") for t in d["insight"]), d["insight"])
 
     def test_frequency_advice_needs_history(self):
         new = C.dashboard([self.lesson(1), self.lesson(0, 8)], 5, {}, self.NOW)
-        self.assertFalse(any("častěji" in t for t in new["insight"]))
+        self.assertFalse(any("more often" in t for t in new["insight"]))
         old = C.dashboard([self.lesson(10), self.lesson(0, 8)], 5, {}, self.NOW)
-        self.assertTrue(any("častěji" in t for t in old["insight"]))
+        self.assertTrue(any("more often" in t for t in old["insight"]))
 
 
 class TestSpeed(unittest.TestCase):
-    """M6: tempo (Farnsworth / rychlost znaku) mezi sezeními."""
+    """M6: pace (Farnsworth / character speed) between sessions."""
     def adv(self, ls, level=51, ulevel=2, cur=None, plat=None):
         return C.speed_advice(ls, level, ulevel, cur or {"wpm": 20, "fwpm": 15}, plat)
 
     def test_needs_two_sessions_on_current_tempo(self):
         self.assertIsNone(self.adv([L(0, level=51, acc=0.95)])["change"])
-        # dvě sezení, ale na jiném tempu → nic (po změně se čeká na nová data)
+        # two sessions, but at a different pace → nothing (after a change new data are awaited)
         ls = [L(0, level=51, acc=0.95, fwpm=14), L(20, level=51, acc=0.95, fwpm=14)]
         self.assertIsNone(self.adv(ls)["change"])
-        # sezení s < 40 pokusy se přeskočí
+        # a session with < 40 trials is skipped
         ls = [L(0, level=51, acc=0.95), L(20, level=51, acc=0.95, trials=20)]
         self.assertIsNone(self.adv(ls)["change"])
 
@@ -366,10 +372,10 @@ class TestSpeed(unittest.TestCase):
         a = self.adv(ls)
         self.assertEqual(a["change"]["kind"], "gaps")
         self.assertEqual(a["change"]["to"], {"wpm": 20, "fwpm": 16})
-        # daleko od znaku → krok 2
+        # far from the character → a step of 2
         ls = [L(0, level=51, acc=0.92, fwpm=10), L(20, level=51, acc=0.93, fwpm=10)]
         self.assertEqual(self.adv(ls, cur={"wpm": 20, "fwpm": 10})["change"]["to"]["fwpm"], 12)
-        # nestabilní reakce → nic
+        # unstable reaction → nothing
         ls = [L(0, level=51, acc=0.92, ttr=500), L(20, level=51, acc=0.93, ttr=700)]
         self.assertIsNone(self.adv(ls)["change"])
         # pod 90 % → nic
@@ -382,8 +388,8 @@ class TestSpeed(unittest.TestCase):
         self.assertEqual((a["change"]["kind"], a["change"]["to"]), ("chars", {"wpm": 19, "fwpm": 18}))
         ls = [L(0, level=51, acc=0.95, fwpm=20), L(20, level=51, acc=0.95, fwpm=20)]
         a = self.adv(ls, cur={"wpm": 20, "fwpm": 20})
-        self.assertIsNone(a["change"])  # 20/20 = cíl U2, dál skluz (M7)
-        self.assertIn("skluz", a["next"])
+        self.assertIsNone(a["change"])  # 20/20 = the U2 goal, then copy behind (M7)
+        self.assertIn("copy behind", a["next"])
 
     def test_u1_never_speeds_up(self):
         ls = [L(0, level=20, acc=0.97), L(20, level=20, acc=0.97)]
@@ -404,10 +410,10 @@ class TestSpeed(unittest.TestCase):
         self.assertTrue(plat and plat["change"])
         a = self.adv(ls, level=20, ulevel=1, plat=plat)
         self.assertEqual((a["change"]["kind"], a["change"]["to"]["fwpm"]), ("plateau", 13))
-        # po změně se čeká 5 sezení na novém tempu
+        # after a change 5 sessions at the new pace are awaited
         ls2 = ls + [L(200 + 20 * i, level=20, acc=0.85, fwpm=13) for i in range(4)]
         self.assertIsNone(self.adv(ls2, level=20, ulevel=1, cur={"wpm": 20, "fwpm": 13}, plat=C.plateau(ls2, 20))["change"])
-        # nejvýš do FW_PLATEAU_MIN
+        # at most down to FW_PLATEAU_MIN
         ls3 = [L(20 * i, level=20, acc=0.85, fwpm=C.FW_PLATEAU_MIN) for i in range(6)]
         cur = {"wpm": 20, "fwpm": C.FW_PLATEAU_MIN}
         self.assertIsNone(self.adv(ls3, level=20, ulevel=1, cur=cur, plat=C.plateau(ls3, 20))["change"])
@@ -417,7 +423,7 @@ class TestSpeed(unittest.TestCase):
         self.assertEqual(self.adv([], plat={"change": True, "sessions": 5})["fluencyS"], C.FLUENCY_PLATEAU_S)
 
     def test_simulated_path_reaches_20_20(self):
-        """Žák s celou sadou, 15 WPM mezery, každé sezení 92 % → kolik sezení do 20/20."""
+        """A student with the full set, 15 WPM spacing, every session 92 % → how many sessions to 20/20."""
         cur, ls, h = {"wpm": 20, "fwpm": 15}, [], 0
         for _ in range(40):
             ls.append(L(h, level=51, acc=0.92, wpm=cur["wpm"], fwpm=cur["fwpm"]))
@@ -428,4 +434,4 @@ class TestSpeed(unittest.TestCase):
             if cur == {"wpm": 20, "fwpm": 20}:
                 break
         self.assertEqual(cur, {"wpm": 20, "fwpm": 20})
-        self.assertLessEqual(len(ls), 10)  # 5 kroků × 2 sezení
+        self.assertLessEqual(len(ls), 10)  # 5 steps × 2 sessions

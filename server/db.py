@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""SQLite: připojení na požadavek, schéma a migrace přes PRAGMA user_version."""
+"""SQLite: a connection per request, schema and migrations via PRAGMA user_version."""
 import os
 import sqlite3
 from pathlib import Path
@@ -9,7 +9,8 @@ from flask import g
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("MORSE_DB", ROOT / "data" / "morse.db"))
 
-# Každá položka = jedna migrace (index + 1 = user_version). Nikdy neměnit, jen přidávat.
+# Each item = one migration (index + 1 = user_version). Never change the statements, only append.
+# (I18N 0.9.0: only the SQL comments were translated to English.)
 MIGRATIONS = [
     """
     CREATE TABLE users (
@@ -18,7 +19,7 @@ MIGRATIONS = [
         pw_hash       TEXT NOT NULL,
         role          TEXT NOT NULL CHECK (role IN ('admin', 'trener', 'zak')),
         age_group     TEXT CHECK (age_group IN ('do15', '15-17', '18-59', '60+')),
-        parent_consent_at TEXT,            -- jen u dětí do 15 let
+        parent_consent_at TEXT,            -- only for children under 15
         created_at    TEXT NOT NULL,
         last_login_at TEXT,
         disabled      INTEGER NOT NULL DEFAULT 0,
@@ -26,9 +27,9 @@ MIGRATIONS = [
     );
     CREATE TABLE invites (
         id          INTEGER PRIMARY KEY,
-        token_hash  TEXT NOT NULL UNIQUE,  -- SHA-256 tokenu, samotný token se neukládá
+        token_hash  TEXT NOT NULL UNIQUE,  -- SHA-256 of the token, the token itself is not stored
         role        TEXT NOT NULL CHECK (role IN ('admin', 'trener', 'zak')),
-        note        TEXT,                  -- pro koho (vidí jen admin/trenér)
+        note        TEXT,                  -- for whom (seen only by admin/coach)
         created_by  INTEGER REFERENCES users(id) ON DELETE CASCADE,
         created_at  TEXT NOT NULL,
         expires_at  TEXT NOT NULL,
@@ -39,7 +40,7 @@ MIGRATIONS = [
         id_hash    TEXT PRIMARY KEY,       -- SHA-256 hodnoty cookie
         user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         csrf       TEXT NOT NULL,
-        device     TEXT,                   -- 'mobil' / 'pc' (jen pro přehled přihlášení)
+        device     TEXT,                   -- 'mobil' (phone) / 'pc' (only for the overview of logins)
         created_at TEXT NOT NULL,
         last_seen  TEXT NOT NULL,
         expires_at TEXT NOT NULL
@@ -53,13 +54,13 @@ MIGRATIONS = [
     CREATE TABLE progress (
         user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
         level      INTEGER NOT NULL,
-        introduced TEXT NOT NULL,          -- JSON pole znaků
+        introduced TEXT NOT NULL,          -- JSON array of characters
         updated_at TEXT NOT NULL
     );
     CREATE TABLE lessons (
         id        INTEGER PRIMARY KEY,
         user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        client_id TEXT NOT NULL,           -- UUID z prohlížeče → opakované odeslání je neškodné
+        client_id TEXT NOT NULL,           -- UUID from the browser → sending again is harmless
         at        TEXT NOT NULL,
         device    TEXT,
         level     INTEGER NOT NULL,
@@ -70,16 +71,16 @@ MIGRATIONS = [
         ttr       INTEGER,
         wpm       INTEGER,
         fwpm      INTEGER,
-        detail    TEXT,                    -- JSON: statistika po znacích, záměny (pro M3)
+        detail    TEXT,                    -- JSON: per-character statistics, confusions (for M3)
         UNIQUE (user_id, client_id)
     );
     CREATE INDEX lessons_user_at ON lessons(user_id, at);
     """,
-    # 2: počítadlo resetů výcviku – zařízení se starší hodnotou nesmí nahrát starý pokrok ani lekce
+    # 2: training reset counter – a device with an older value must not upload old progress or lessons
     """
     ALTER TABLE users ADD COLUMN train_epoch INTEGER NOT NULL DEFAULT 0
     """,
-    # 3 (M4): výsledek dotazníku (bez odpovědí – jen archetyp, modifikátory, preference) a dosažená úroveň U1–U6
+    # 3 (M4): questionnaire result (without answers – only archetype, modifiers, preferences) and the reached level U1–U6
     """
     CREATE TABLE coach (
         user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -92,15 +93,36 @@ MIGRATIONS = [
         updated_at  TEXT NOT NULL
     )
     """,
-    # 4 (M7): režim lekce – 'znak' (čeká na odpověď, TTR) / 'skluz' (proud, hodnocení zarovnáním)
+    # 4 (M7): lesson mode – 'znak' (character: waits for an answer, TTR) / 'skluz' (copy behind: a stream, scored by alignment)
     """
     ALTER TABLE lessons ADD COLUMN mode TEXT NOT NULL DEFAULT 'znak'
     """,
-    # 5 (E3): pravidla hesla – stávající účty si musí heslo změnit (pw_change = 1), odkaz pro nové heslo
-    # = pozvánka s reset_user (trénink zůstane)
+    # 5 (E3): password rules – existing accounts must change their password (pw_change = 1), a new-password link
+    # = an invitation with reset_user (the training stays)
     """
     ALTER TABLE users ADD COLUMN pw_change INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE invites ADD COLUMN reset_user INTEGER REFERENCES users(id) ON DELETE CASCADE
+    """,
+    # 6 (V1): debug trace of the training – only for accounts with debug_log = 1 (enabled by the admin), deleted after 180 days
+    """
+    ALTER TABLE users ADD COLUMN debug_log INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE traces (
+        id        INTEGER PRIMARY KEY,
+        user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        lesson_id TEXT,                    -- client_id of the lesson (lessons.client_id), NULL for an aborted lesson
+        kind      TEXT NOT NULL,           -- znak / skluz
+        at        TEXT NOT NULL,           -- start of the lesson (client time)
+        received  TEXT NOT NULL,
+        data      TEXT NOT NULL            -- JSON: meta + events [t_ms, type, data]
+    );
+    CREATE INDEX traces_user_at ON traces (user_id, at);
+    CREATE TABLE client_errors (
+        id       INTEGER PRIMARY KEY,
+        user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        at       TEXT NOT NULL,
+        received TEXT NOT NULL,
+        data     TEXT NOT NULL             -- JSON: message, source, line, stack, version, view
+    )
     """,
 ]
 
@@ -108,7 +130,7 @@ MIGRATIONS = [
 def connect(path=None):
     path = Path(path or DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path, timeout=10, isolation_level=None)  # autocommit, transakce ručně
+    con = sqlite3.connect(path, timeout=10, isolation_level=None)  # autocommit, transactions by hand
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("PRAGMA busy_timeout = 5000")
@@ -121,7 +143,7 @@ def migrate(con):
     for i in range(ver, len(MIGRATIONS)):
         con.execute("BEGIN")
         try:
-            # executescript by transakci commitnul předčasně → příkazy po jednom (v SQL nesmí být ';' v komentářích)
+            # executescript would commit the transaction early → statements one by one (no ';' allowed in SQL comments)
             for stmt in MIGRATIONS[i].split(";"):
                 if stmt.strip():
                     con.execute(stmt)

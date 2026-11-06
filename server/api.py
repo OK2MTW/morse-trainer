@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""REST API: účty, pozvánky, nastavení, pokrok, lekce, export a smazání dat."""
+"""REST API: accounts, invitations, settings, progress, lessons, export and deletion of data."""
 import json
 import re
 import secrets
@@ -7,26 +7,29 @@ from datetime import timedelta
 
 from flask import Blueprint, Response, g, jsonify, request
 
-from server import auth
-from server.auth import iso, login_required, now, sha256
+from server import auth, i18n
+from server.auth import ROLE_ADMIN, ROLE_COACH, ROLE_STUDENT, iso, login_required, now, sha256
 from server import coach
+from server.coach import MODE_CHAR, MODE_COPY
 from server.db import get_db
+from server.i18n import t
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
-# stejné pořadí jako web/js/charset.js
+# the same order as web/js/charset.js
 KOCH_ORDER = list("KMURESNAPTLWI.JZ=FOY,VG5/Q92H38B?47C1D60X'-:()\"@+&!")
 assert len(KOCH_ORDER) == 51 and len(set(KOCH_ORDER)) == 51
 CHARSET = set(KOCH_ORDER)
 
-AGE_GROUPS = ("do15", "15-17", "18-59", "60+")
-NICK_RE = re.compile(r"^[\w][\w .\-]{1,22}[\w.]$")  # 3–24 znaků, písmena vč. diakritiky, číslice, mezera . - _
+AGE_UNDER_15 = "do15"  # stored value ("do 15" = under 15)
+AGE_GROUPS = (AGE_UNDER_15, "15-17", "18-59", "60+")
+NICK_RE = re.compile(r"^[\w][\w .\-]{1,22}[\w.]$")  # 3–24 characters, letters incl. diacritics, digits, space . - _
 INVITE_DAYS = 7
 MAX_LESSONS_RETURNED = 500
 
-# Nastavení synchronizovaná mezi zařízeními (hlasitost zůstává v každém zařízení zvlášť).
+# Settings synchronized between devices (volume stays separate on each device).
 SETTINGS_RULES = {"wpm": (12, 40), "fwpm": (3, 40), "freq": (350, 900), "lessonMin": (1, 10),
-                  "autoSpeed": (0, 1)}  # M6: trenér řídí tempo (1 = ano)
+                  "autoSpeed": (0, 1)}  # M6: the coach controls the pace (1 = yes)
 
 
 def err(msg, code=400):
@@ -38,17 +41,20 @@ def body():
     return data if isinstance(data, dict) else {}
 
 
+DEVICES = ("mobil", "pc")  # stored values: phone/tablet ("mobil"), computer
+
+
 def device_of(value):
-    return value if value in ("mobil", "pc") else None
+    return value if value in DEVICES else None
 
 
 def user_json(row_or_dict):
     u = dict(row_or_dict)
     return {"id": u["id"], "nick": u["nick"], "role": u["role"], "age_group": u.get("age_group"),
-            "pw_change": bool(u.get("pw_change", 0))}
+            "pw_change": bool(u.get("pw_change", 0)), "debug": bool(u.get("debug_log", 0))}
 
 
-# ================= přihlášení =================
+# ================= login =================
 @bp.get("/me")
 def me():
     if g.user is None:
@@ -64,16 +70,16 @@ def login():
     ip = request.remote_addr or "?"
     keys = (f"ip:{ip}", f"nick:{nick.lower()}")
     if auth.too_many(*keys):
-        return err("Příliš mnoho neúspěšných pokusů. Zkus to za 15 minut.", 429)
+        return err(t("err.tooManyLogins"), 429)
     db = get_db()
     row = db.execute("SELECT * FROM users WHERE nick = ?", (nick,)).fetchone()
     ok, new_hash = auth.verify_password(row["pw_hash"] if row else None, pw)
     if not ok or row["disabled"]:
         auth.note_fail(*keys)
-        return auth.auth_error("Špatná přezdívka nebo heslo.")
+        return auth.auth_error(t("err.badLogin"))
     auth.clear_fails(*keys)
-    if row["role"] == "admin" and auth.is_public():
-        return err("Správce se může přihlásit jen z domácí sítě.", 403)
+    if row["role"] == ROLE_ADMIN and auth.is_public():
+        return err(t("err.adminHomeOnly"), 403)
     if new_hash:
         db.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (new_hash, row["id"]))
     db.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (iso(now()), row["id"]))
@@ -110,19 +116,19 @@ def change_password():
     old = str(d.get("old", ""))[:auth.LOGIN_PW_MAX + 1]
     ok, _ = auth.verify_password(row["pw_hash"], old)
     if not ok:
-        return err("Současné heslo nesouhlasí.", 403)
+        return err(t("err.currentPassword"), 403)
     new = d.get("new")
     if (p := auth.password_problem(new, g.user["nick"])):
         return err(p)
     if new == old:
-        return err("Nové heslo musí být jiné než současné.")
+        return err(t("err.samePassword"))
     db.execute("UPDATE users SET pw_hash = ?, pw_change = 0 WHERE id = ?", (auth.hash_password(new), g.user["id"]))
-    # ostatní zařízení odhlásit, toto ponechat
+    # log out the other devices, keep this one
     db.execute("DELETE FROM sessions WHERE user_id = ? AND id_hash != ?", (g.user["id"], g.session["id_hash"]))
     return jsonify(ok=True)
 
 
-# ================= pozvánky a registrace =================
+# ================= invitations and registration =================
 def find_invite(token):
     if not isinstance(token, str) or not (20 <= len(token) <= 64):
         return None
@@ -136,11 +142,11 @@ def find_invite(token):
 def invite_check():
     ip = request.remote_addr or "?"
     if auth.too_many(f"inv:{ip}"):
-        return err("Příliš mnoho pokusů. Zkus to za 15 minut.", 429)
+        return err(t("err.tooManyAttempts"), 429)
     inv = find_invite(body().get("token"))
     if inv is None:
         auth.note_fail(f"inv:{ip}")
-        return err("Pozvánka neplatí – je použitá, vypršela, nebo je odkaz neúplný.", 404)
+        return err(t("err.inviteInvalid"), 404)
     reset = None
     if inv["reset_user"]:
         reset = get_db().execute("SELECT nick FROM users WHERE id = ?", (inv["reset_user"],)).fetchone()["nick"]
@@ -148,23 +154,23 @@ def invite_check():
 
 
 def create_user(db, nick, pw, role, age_group=None, consent=False, invited_by=None):
-    """Společné pro registraci i CLI. Vrací (id, None) nebo (None, chyba)."""
+    """Shared by registration and the CLI. Returns (id, None) or (None, error)."""
     nick = (nick or "").strip()
     if not NICK_RE.match(nick):
-        return None, "Přezdívka: 3–24 znaků, písmena, číslice, mezera, tečka, pomlčka."
+        return None, t("err.nick")
     if (p := auth.password_problem(pw, nick)):
         return None, p
     if age_group not in AGE_GROUPS:
         age_group = None
-    if age_group == "do15" and not consent:
-        return None, "U dětí do 15 let je potřeba souhlas rodiče."
+    if age_group == AGE_UNDER_15 and not consent:
+        return None, t("err.parentConsent")
     if db.execute("SELECT 1 FROM users WHERE nick = ?", (nick,)).fetchone():
-        return None, "Tahle přezdívka už je obsazená."
-    t = iso(now())
+        return None, t("err.nickTaken")
+    ts = iso(now())
     cur = db.execute(
         "INSERT INTO users (nick, pw_hash, role, age_group, parent_consent_at, created_at, invited_by, pw_change) "
         "VALUES (?,?,?,?,?,?,?,0)",
-        (nick, auth.hash_password(pw), role, age_group, t if age_group == "do15" else None, t, invited_by))
+        (nick, auth.hash_password(pw), role, age_group, ts if age_group == AGE_UNDER_15 else None, ts, invited_by))
     return cur.lastrowid, None
 
 
@@ -173,20 +179,20 @@ def register():
     d = body()
     ip = request.remote_addr or "?"
     if auth.too_many(f"inv:{ip}"):
-        return err("Příliš mnoho pokusů. Zkus to za 15 minut.", 429)
+        return err(t("err.tooManyAttempts"), 429)
     db = get_db()
     inv = find_invite(d.get("token"))
     if inv is None or inv["reset_user"]:
         auth.note_fail(f"inv:{ip}")
-        return err("Pozvánka neplatí – je použitá, vypršela, nebo je odkaz neúplný.", 404)
+        return err(t("err.inviteInvalid"), 404)
     db.execute("BEGIN IMMEDIATE")
     try:
-        # pozvánku „zabereme“ v transakci → nejde použít dvakrát souběžně
+        # "claim" the invitation in a transaction → it cannot be used twice concurrently
         taken = db.execute("UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL",
                            (iso(now()), inv["id"])).rowcount
         if not taken:
             db.execute("ROLLBACK")
-            return err("Pozvánka už byla použita.", 409)
+            return err(t("err.inviteUsed"), 409)
         uid, problem = create_user(db, d.get("nick"), d.get("password"), inv["role"], d.get("age_group"),
                                    bool(d.get("parent_consent")), inv["created_by"])
         if problem:
@@ -205,30 +211,30 @@ def register():
     return resp, 201
 
 
-# ================= zapomenuté heslo (E3): odkaz od správce / trenéra, trénink zůstane =================
+# ================= forgotten password (E3): a link from an administrator / coach, the training stays =================
 RESET_DAYS = 3
 
 
 @bp.post("/users/<int:uid>/password-link")
-@login_required("admin", "trener")
+@login_required(ROLE_ADMIN, ROLE_COACH)
 def password_link(uid):
     db = get_db()
     row = db.execute("SELECT id, nick, role, invited_by FROM users WHERE id = ?", (uid,)).fetchone()
-    if row is None or (g.user["role"] != "admin" and row["invited_by"] != g.user["id"]):
-        return err("Uživatel nenalezen.", 404)
+    if row is None or (g.user["role"] != ROLE_ADMIN and row["invited_by"] != g.user["id"]):
+        return err(t("err.userNotFound"), 404)
     token, expires = create_reset_link(db, row, g.user["id"])
     return jsonify(token=token, nick=row["nick"], expires_at=expires), 201
 
 
 def create_reset_link(db, user_row, created_by):
-    """Společné pro API i CLI: starší nepoužité odkazy uživatele zruší, vrátí (token, platnost)."""
+    """Shared by the API and the CLI: revokes the user's older unused links, returns (token, expiry)."""
     db.execute("DELETE FROM invites WHERE reset_user = ? AND used_at IS NULL", (user_row["id"],))
     token = secrets.token_urlsafe(24)
-    t = now()
-    expires = iso(t + timedelta(days=RESET_DAYS))
+    ts = now()
+    expires = iso(ts + timedelta(days=RESET_DAYS))
     db.execute("INSERT INTO invites (token_hash, role, note, created_by, created_at, expires_at, reset_user) "
                "VALUES (?,?,?,?,?,?,?)",
-               (sha256(token), user_row["role"], f"nové heslo: {user_row['nick']}"[:60], created_by, iso(t), expires,
+               (sha256(token), user_row["role"], t("invite.resetNote", nick=user_row["nick"])[:60], created_by, iso(ts), expires,
                 user_row["id"]))
     return token, expires
 
@@ -238,17 +244,17 @@ def password_reset():
     d = body()
     ip = request.remote_addr or "?"
     if auth.too_many(f"inv:{ip}"):
-        return err("Příliš mnoho pokusů. Zkus to za 15 minut.", 429)
+        return err(t("err.tooManyAttempts"), 429)
     db = get_db()
     inv = find_invite(d.get("token"))
     if inv is None or not inv["reset_user"]:
         auth.note_fail(f"inv:{ip}")
-        return err("Odkaz neplatí – je použitý, vypršel, nebo je neúplný.", 404)
+        return err(t("err.linkInvalid"), 404)
     row = db.execute("SELECT * FROM users WHERE id = ?", (inv["reset_user"],)).fetchone()
     if row["disabled"]:
-        return err("Účet je zablokovaný – obrať se na správce.", 403)
-    if row["role"] == "admin" and auth.is_public():
-        return err("Správce si heslo nastaví jen z domácí sítě.", 403)
+        return err(t("err.accountBlocked"), 403)
+    if row["role"] == ROLE_ADMIN and auth.is_public():
+        return err(t("err.adminPwHomeOnly"), 403)
     pw = d.get("password")
     if (p := auth.password_problem(pw, row["nick"])):
         return err(p)
@@ -258,10 +264,10 @@ def password_reset():
                            (iso(now()), row["id"], inv["id"])).rowcount
         if not taken:
             db.execute("ROLLBACK")
-            return err("Odkaz už byl použit.", 409)
+            return err(t("err.linkUsed"), 409)
         db.execute("UPDATE users SET pw_hash = ?, pw_change = 0, last_login_at = ? WHERE id = ?",
                    (auth.hash_password(pw), iso(now()), row["id"]))
-        db.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))  # všude odhlásit
+        db.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))  # log out everywhere
         db.execute("COMMIT")
     except Exception:
         db.execute("ROLLBACK")
@@ -275,67 +281,68 @@ def password_reset():
 
 
 @bp.post("/invites")
-@login_required("admin", "trener")
+@login_required(ROLE_ADMIN, ROLE_COACH)
 def invite_create():
     d = body()
-    role = d.get("role", "zak")
+    role = d.get("role", ROLE_STUDENT)
     if role not in auth.ROLES:
-        return err("Neznámá role.")
-    if g.user["role"] != "admin" and role != "zak":
-        return err("Trenér může zvát jen žáky.", 403)
+        return err(t("err.unknownRole"))
+    if g.user["role"] != ROLE_ADMIN and role != ROLE_STUDENT:
+        return err(t("err.coachInvitesStudents"), 403)
     days = d.get("days", INVITE_DAYS)
     days = days if isinstance(days, int) and 1 <= days <= 30 else INVITE_DAYS
     note = str(d.get("note", "")).strip()[:60] or None
     token = secrets.token_urlsafe(24)
-    t = now()
+    ts = now()
     cur = get_db().execute(
         "INSERT INTO invites (token_hash, role, note, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?)",
-        (sha256(token), role, note, g.user["id"], iso(t), iso(t + timedelta(days=days))))
-    return jsonify(id=cur.lastrowid, token=token, role=role, expires_at=iso(t + timedelta(days=days))), 201
+        (sha256(token), role, note, g.user["id"], iso(ts), iso(ts + timedelta(days=days))))
+    return jsonify(id=cur.lastrowid, token=token, role=role, expires_at=iso(ts + timedelta(days=days))), 201
 
 
 @bp.get("/invites")
-@login_required("admin", "trener")
+@login_required(ROLE_ADMIN, ROLE_COACH)
 def invite_list():
     sql = ("SELECT i.id, i.role, i.note, i.created_at, i.expires_at, i.used_at, u.nick AS used_by_nick, "
            "c.nick AS created_by_nick FROM invites i LEFT JOIN users u ON u.id = i.used_by "
            "LEFT JOIN users c ON c.id = i.created_by")
     args = ()
-    if g.user["role"] != "admin":
+    if g.user["role"] != ROLE_ADMIN:
         sql += " WHERE i.created_by = ?"
         args = (g.user["id"],)
     rows = get_db().execute(sql + " ORDER BY i.id DESC LIMIT 50", args).fetchall()
-    t = iso(now())
+    ts = iso(now())
     out = []
     for r in rows:
         x = dict(r)
-        x["state"] = "použitá" if r["used_at"] else ("vypršela" if r["expires_at"] < t else "platná")
+        # I18N (0.9.0): a state code, the client translates it (previously a Czech word)
+        x["state"] = "used" if r["used_at"] else ("expired" if r["expires_at"] < ts else "valid")
         out.append(x)
     return jsonify(invites=out)
 
 
 @bp.delete("/invites/<int:inv_id>")
-@login_required("admin", "trener")
+@login_required(ROLE_ADMIN, ROLE_COACH)
 def invite_delete(inv_id):
     sql = "DELETE FROM invites WHERE id = ? AND used_at IS NULL"
     args = [inv_id]
-    if g.user["role"] != "admin":
+    if g.user["role"] != ROLE_ADMIN:
         sql += " AND created_by = ?"
         args.append(g.user["id"])
     n = get_db().execute(sql, args).rowcount
-    return jsonify(ok=True) if n else err("Pozvánka nenalezena.", 404)
+    return jsonify(ok=True) if n else err(t("err.inviteNotFound"), 404)
 
 
-# ================= správa uživatelů =================
+# ================= user management =================
 @bp.get("/users")
-@login_required("admin", "trener")
+@login_required(ROLE_ADMIN, ROLE_COACH)
 def users_list():
     sql = ("SELECT u.id, u.nick, u.role, u.age_group, u.created_at, u.last_login_at, u.disabled, "
            "(SELECT COUNT(*) FROM lessons l WHERE l.user_id = u.id) AS lessons, "
            "(SELECT MAX(at) FROM lessons l WHERE l.user_id = u.id) AS last_lesson, "
            "(SELECT level FROM progress p WHERE p.user_id = u.id) AS level FROM users u")
     args = ()
-    if g.user["role"] != "admin":  # trenér vidí jen své žáky
+    if g.user["role"] != ROLE_ADMIN:  # a coach sees only their own students
         sql += " WHERE u.invited_by = ?"
         args = (g.user["id"],)
     return jsonify(users=[dict(r) for r in get_db().execute(sql + " ORDER BY u.nick", args)])
@@ -347,18 +354,18 @@ def admins_left(db, except_id):
 
 
 @bp.patch("/users/<int:uid>")
-@login_required("admin")
+@login_required(ROLE_ADMIN)
 def user_update(uid):
     d = body()
     db = get_db()
     if db.execute("SELECT 1 FROM users WHERE id = ?", (uid,)).fetchone() is None:
-        return err("Uživatel nenalezen.", 404)
-    demote = ("role" in d and d["role"] != "admin") or d.get("disabled")
+        return err(t("err.userNotFound"), 404)
+    demote = ("role" in d and d["role"] != ROLE_ADMIN) or d.get("disabled")
     if demote and uid == g.user["id"] and admins_left(db, uid) == 0:
-        return err("Jsi jediný admin – nejdřív jmenuj jiného.")
+        return err(t("err.lastAdmin"))
     if "role" in d:
         if d["role"] not in auth.ROLES:
-            return err("Neznámá role.")
+            return err(t("err.unknownRole"))
         db.execute("UPDATE users SET role = ? WHERE id = ?", (d["role"], uid))
     if "disabled" in d:
         db.execute("UPDATE users SET disabled = ? WHERE id = ?", (1 if d["disabled"] else 0, uid))
@@ -367,7 +374,7 @@ def user_update(uid):
     return jsonify(ok=True)
 
 
-# ================= data uživatele =================
+# ================= user data =================
 def clean_settings(s):
     out = {}
     if not isinstance(s, dict):
@@ -376,30 +383,34 @@ def clean_settings(s):
         v = s.get(k)
         if isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi:
             out[k] = int(round(v))
+    if i18n.supported(s.get("lang")):  # I18N: UI language follows the account
+        out["lang"] = s["lang"]
     if "fwpm" in out and "wpm" in out and out["fwpm"] > out["wpm"]:
         out["fwpm"] = out["wpm"]
     return out
 
 
 def reset_training(db, uid):
-    """Smaže lekce a pokrok (nastavení zůstává) a zvýší počítadlo resetů. Vrací nové epoch."""
+    """Deletes lessons and progress (settings stay) and increments the reset counter. Returns the new epoch."""
     db.execute("DELETE FROM lessons WHERE user_id = ?", (uid,))
+    db.execute("DELETE FROM traces WHERE user_id = ?", (uid,))
     db.execute("DELETE FROM progress WHERE user_id = ?", (uid,))
     db.execute("UPDATE users SET train_epoch = train_epoch + 1 WHERE id = ?", (uid,))
-    # dotazník (preference) zůstává jako nastavení, dosažená úroveň se vrací na U1
+    # the questionnaire (preferences) stays like settings, the reached level goes back to U1
     db.execute("UPDATE coach SET ulevel = 1, ulevel_at = NULL WHERE user_id = ?", (uid,))
     return db.execute("SELECT train_epoch FROM users WHERE id = ?", (uid,)).fetchone()[0]
 
 
 def stale_epoch(db, uid, sent):
-    """True, pokud zařízení posílá data z doby před resetem výcviku."""
+    """True if the device sends data from before a training reset."""
     if sent is None:
         return False
     cur = db.execute("SELECT train_epoch FROM users WHERE id = ?", (uid,)).fetchone()[0]
     return sent != cur
 
 
-STALE = "Výcvik byl mezitím resetován."
+def stale():
+    return t("err.stale")
 
 
 def load_user_data(db, uid, limit=MAX_LESSONS_RETURNED, detail=False):
@@ -411,7 +422,7 @@ def load_user_data(db, uid, limit=MAX_LESSONS_RETURNED, detail=False):
     out_lessons = []
     for r in lessons:
         x = dict(r)
-        if detail:  # detail po znacích jen v exportu (běžná synchronizace má být lehká)
+        if detail:  # per-character detail only in the export (the normal sync should be light)
             x["detail"] = json.loads(x["detail"]) if x["detail"] else None
         else:
             del x["detail"]
@@ -434,45 +445,45 @@ def data_get():
 
 
 @bp.put("/settings")
-@login_required("trener", "zak")  # správce netrénuje
+@login_required(ROLE_COACH, ROLE_STUDENT)  # the administrator does not train
 def settings_put():
     s = clean_settings(body().get("settings"))
     if not s:
-        return err("Žádné platné nastavení.")
+        return err(t("err.noSettings"))
     db = get_db()
     old = db.execute("SELECT data FROM settings WHERE user_id = ?", (g.user["id"],)).fetchone()
     merged = {**(json.loads(old["data"]) if old else {}), **s}
-    t = iso(now())
+    ts = iso(now())
     db.execute("INSERT INTO settings (user_id, data, updated_at) VALUES (?,?,?) "
                "ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-               (g.user["id"], json.dumps(merged), t))
-    return jsonify(settings=merged, updated_at=t)
+               (g.user["id"], json.dumps(merged), ts))
+    return jsonify(settings=merged, updated_at=ts)
 
 
 @bp.put("/progress")
-@login_required("trener", "zak")
+@login_required(ROLE_COACH, ROLE_STUDENT)
 def progress_put():
     d = body()
     level = d.get("level")
     if not isinstance(level, int) or isinstance(level, bool) or not 2 <= level <= len(KOCH_ORDER):
-        return err("Neplatná úroveň.")
+        return err(t("err.badLevel"))
     intro = d.get("introduced", [])
     if not isinstance(intro, list):
-        return err("Neplatný seznam znaků.")
+        return err(t("err.badChars"))
     db = get_db()
     if stale_epoch(db, g.user["id"], d.get("epoch")):
-        return err(STALE, 409)
+        return err(stale(), 409)
     old = db.execute("SELECT introduced FROM progress WHERE user_id = ?", (g.user["id"],)).fetchone()
-    # „seznámené“ znaky se jen sjednocují – offline zařízení nesmí seznámení „vrátit“
+    # "introduced" characters are only merged – an offline device must not "undo" an introduction
     known = set(json.loads(old["introduced"])) if old else set()
     known |= {c for c in intro if isinstance(c, str) and c in CHARSET}
     introduced = [c for c in KOCH_ORDER if c in known]
-    t = iso(now())
+    ts = iso(now())
     db.execute("INSERT INTO progress (user_id, level, introduced, updated_at) VALUES (?,?,?,?) "
                "ON CONFLICT(user_id) DO UPDATE SET level = excluded.level, introduced = excluded.introduced, "
                "updated_at = excluded.updated_at",
-               (g.user["id"], level, json.dumps(introduced), t))
-    return jsonify(level=level, introduced=introduced, updated_at=t)
+               (g.user["id"], level, json.dumps(introduced), ts))
+    return jsonify(level=level, introduced=introduced, updated_at=ts)
 
 
 def num(v, lo, hi, kind=float):
@@ -487,7 +498,7 @@ ADV_REASONS = {"ok", "few", "acc", "ttrUnstable", "newFew", "newAcc", "newSlow",
 
 
 def clean_detail(det):
-    """Statistika po znacích a záměny – jen známé znaky a čísla, omezená velikost."""
+    """Per-character statistics and confusions – only known characters and numbers, limited size."""
     if not isinstance(det, dict):
         return None
     per = []
@@ -500,7 +511,7 @@ def clean_detail(det):
         if isinstance(c, dict) and isinstance(c.get("pair"), str) and len(c["pair"]) <= 5:
             conf.append({"pair": c["pair"], "n": num(c.get("n"), 0, 10000, int) or 0})
     out = {"perChar": per, "confusions": conf}
-    # M4: regulace obtížnosti, rozcvička, důvod rozhodnutí o postupu
+    # M4: difficulty control, warm-up, reason of the decision to advance
     if num(det.get("diff"), 0, 5) is not None:
         out["diff"] = num(det.get("diff"), 0, 5)
     log = []
@@ -513,7 +524,7 @@ def clean_detail(det):
     if isinstance(w, dict) and num(w.get("n"), 1, 10000, int):
         out["warmup"] = {"n": num(w.get("n"), 1, 10000, int), "acc": num(w.get("acc"), 0, 1),
                          "ttr": num(w.get("ttr"), 0, 60000, int), "gapH": num(w.get("gapH"), 0, 100000)}
-    # M5: únava v lekci (základ, události s volbou uživatele) a pauzy
+    # M5: fatigue in a lesson (baseline, events with the user's choice) and pauses
     f = det.get("fatigue")
     if isinstance(f, dict):
         b = f.get("base") if isinstance(f.get("base"), dict) else {}
@@ -532,7 +543,7 @@ def clean_detail(det):
             ps.append([num(e[0], 0, 100000, int), num(e[1], 0, 86400, int)])
     if ps:
         out["pauses"] = ps
-    # M6: prodloužení mezer v lekci [pokus, krok] a blok plynulosti (nezapočítává se do lekce)
+    # M6: lengthening of gaps in a lesson [trial, step] and the fluency block (not counted in the lesson)
     gl = []
     for e in (det.get("gapLog") or [])[:30] if isinstance(det.get("gapLog"), list) else []:
         if isinstance(e, list) and len(e) == 2 and num(e[0], 0, 10000, int) is not None \
@@ -550,19 +561,19 @@ def clean_detail(det):
     return out
 
 
-LESSON_MODES = ("znak", "skluz")   # M8 může přidat např. 'hlava' (příjem v hlavě)
+LESSON_MODES = (MODE_CHAR, MODE_COPY)   # a later milestone may add e.g. head copy
 COPY_CONTENTS = ("groups", "pseudo", "words", "abbr", "calls", "long", "mix")  # M8 (U4); U5: qso …
-COPY_FATIGUE_KINDS = {"acc", "miss"}  # M8: únava ve skluzu – pokles úspěšnosti / ztráta proudu
+COPY_FATIGUE_KINDS = {"acc", "miss"}  # M8: fatigue in copy behind – accuracy drop / losing the stream
 
 
 def clean_copy_detail(det):
-    """Detail lekce ve skluzu (M7): souhrn zarovnání, skluz, slova, záměny – jen čísla a známé hodnoty."""
+    """Detail of a copy-behind lesson (M7): alignment summary, lag, words, confusions – only numbers and known values."""
     if not isinstance(det, dict) or not isinstance(det.get("copy"), dict):
         return None
     c = det["copy"]
     out = {"step": num(c.get("step"), 1, 50, int), "content": c.get("content") if c.get("content") in COPY_CONTENTS else None,
            "gapX": num(c.get("gapX"), 0.5, 10)}
-    # M8 (volitelné – lekce M7 je nemají): rychlost kroku, načasování značek, skluz ve slovech
+    # M8 (optional – M7 lessons do not have them): step speed, timing of marks, lag in words
     for k, lo, hi, typ in (("wpm", 5, 60, int), ("markLag", 1, 5, int), ("lagW", 0, 100, float), ("lagWP90", 0, 100, int)):
         if c.get(k) is not None:
             out[k] = num(c.get(k), lo, hi, typ)
@@ -588,7 +599,7 @@ def clean_copy_detail(det):
             ps.append([num(e[0], 0, 100000, int), num(e[1], 0, 86400, int)])
     if ps:
         res["pauses"] = ps
-    f = det.get("fatigue")  # M8: únava ve skluzu (vyhodnocení po řádcích)
+    f = det.get("fatigue")  # M8: fatigue in copy behind (evaluated per line)
     if isinstance(f, dict):
         b = f.get("base") if isinstance(f.get("base"), dict) else {}
         ev = []
@@ -603,15 +614,15 @@ def clean_copy_detail(det):
 
 
 @bp.post("/lessons")
-@login_required("trener", "zak")
+@login_required(ROLE_COACH, ROLE_STUDENT)
 def lessons_post():
     d = body()
     items = d.get("lessons")
     if not isinstance(items, list) or len(items) > 200:
-        return err("Očekávám seznam lekcí (max. 200).")
+        return err(t("err.lessonList"))
     db = get_db()
     if stale_epoch(db, g.user["id"], d.get("epoch")):
-        return err(STALE, 409)
+        return err(stale(), 409)
     saved = []
     db.execute("BEGIN")
     try:
@@ -626,16 +637,16 @@ def lessons_post():
             correct = num(x.get("correct"), 0, 100000, int)
             if level is None or trials is None or correct is None or correct > trials:
                 continue
-            mode = x.get("mode", "znak")
+            mode = x.get("mode", MODE_CHAR)
             if mode not in LESSON_MODES:
                 continue
-            detail = clean_detail(x.get("detail")) if mode == "znak" else clean_copy_detail(x.get("detail"))
+            detail = clean_detail(x.get("detail")) if mode == MODE_CHAR else clean_copy_detail(x.get("detail"))
             db.execute(
                 "INSERT INTO lessons (user_id, client_id, at, device, mode, level, dur_s, trials, correct, acc, ttr, "
                 "wpm, fwpm, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id, client_id) DO NOTHING",
                 (g.user["id"], cid, at, device_of(x.get("device")), mode, level, num(x.get("durS"), 0, 86400, int),
                  trials, correct, num(x.get("acc"), 0, 1),
-                 num(x.get("ttr"), 0, 60000, int) if mode == "znak" else None,
+                 num(x.get("ttr"), 0, 60000, int) if mode == MODE_CHAR else None,
                  num(x.get("wpm"), 5, 60, int), num(x.get("fwpm"), 1, 60, int),
                  json.dumps(detail) if detail else None))
             saved.append(cid)
@@ -646,13 +657,75 @@ def lessons_post():
     return jsonify(saved=saved)
 
 
-# ================= statistika znaků (M3) =================
-STATS_LESSONS = 20   # z kolika posledních lekcí se statistika počítá
-STATS_RECENT = 5     # „nedávno“ = posledních N lekcí, „předtím“ = zbytek (pro šipku trendu)
+# ================= debug trace of the training (V1) =================
+TRACE_MAX = 200_000        # bytes of JSON per lesson
+TRACE_KEEP_DAYS = 180      # owner's decision 2026-11-05: until revoked, at most 6 months
+ERRORS_MAX = 20
+
+
+def purge_debug(db):
+    """Deletes debug data older than TRACE_KEEP_DAYS (called on every write – cheap, there is an index)."""
+    limit = iso(now() - timedelta(days=TRACE_KEEP_DAYS))
+    db.execute("DELETE FROM traces WHERE received < ?", (limit,))
+    db.execute("DELETE FROM client_errors WHERE received < ?", (limit,))
+
+
+def debug_enabled():
+    return bool(g.user and g.user.get("debug"))
+
+
+@bp.post("/trace")
+@login_required(ROLE_COACH, ROLE_STUDENT)
+def trace_post():
+    if not debug_enabled():
+        return jsonify(ok=False, debug=False)  # tracing off → the client drops it
+    d = body()
+    data = d.get("data")
+    kind = d.get("kind")
+    at = d.get("at")
+    lesson_id = d.get("lesson_id")
+    if (kind not in LESSON_MODES or not isinstance(at, str) or not 10 <= len(at) <= 40
+            or not isinstance(data, dict)
+            or (lesson_id is not None and not (isinstance(lesson_id, str) and 8 <= len(lesson_id) <= 64))):
+        return err(t("err.badTrace"))
+    raw = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    if len(raw.encode()) > TRACE_MAX:
+        return err(t("err.traceTooBig"), 413)
+    db = get_db()
+    db.execute("INSERT INTO traces (user_id, lesson_id, kind, at, received, data) VALUES (?,?,?,?,?,?)",
+               (g.user["id"], lesson_id, kind, at, iso(now()), raw))
+    purge_debug(db)
+    return jsonify(ok=True)
+
+
+@bp.post("/client-errors")
+@login_required()
+def client_errors_post():
+    if not debug_enabled():
+        return jsonify(ok=False, debug=False)
+    items = body().get("errors")
+    if not isinstance(items, list):
+        return err(t("err.errorList"))
+    db = get_db()
+    ts = iso(now())
+    for x in items[:ERRORS_MAX]:
+        if not isinstance(x, dict):
+            continue
+        clean = {k: str(x.get(k, ""))[:2000 if k == "stack" else 300] for k in ("msg", "src", "line", "stack", "ver", "view", "ua")}
+        at = str(x.get("at", ts))[:40]
+        db.execute("INSERT INTO client_errors (user_id, at, received, data) VALUES (?,?,?,?)",
+                   (g.user["id"], at, ts, json.dumps(clean, ensure_ascii=False)))
+    purge_debug(db)
+    return jsonify(ok=True)
+
+
+# ================= character statistics (M3) =================
+STATS_LESSONS = 20   # from how many recent lessons the statistics are computed
+STATS_RECENT = 5     # "recent" = the last N lessons, "before" = the rest (for the trend arrow)
 
 
 def wmedian(pairs):
-    """Vážený medián z dvojic (hodnota, váha)."""
+    """Weighted median of (value, weight) pairs."""
     pairs = sorted((v, w) for v, w in pairs if v is not None and w > 0)
     total = sum(w for _, w in pairs)
     if not total:
@@ -666,7 +739,7 @@ def wmedian(pairs):
 
 
 def agg(items):
-    """items = [{n, acc, ttr}] z jednotlivých lekcí → {n, acc (vážená n), ttr (vážený medián)}."""
+    """items = [{n, acc, ttr}] from individual lessons → {n, acc (weighted by n), ttr (weighted median)}."""
     n = sum(x["n"] for x in items)
     if not n:
         return None
@@ -678,7 +751,7 @@ def agg(items):
 
 
 def char_stats(rows):
-    """rows = lekce (nejstarší první) s polem detail → statistika po znacích."""
+    """rows = lessons (oldest first) with the detail field → per-character statistics."""
     per, conf = {}, {}
     total = len(rows)
     for i, r in enumerate(rows):
@@ -711,15 +784,15 @@ def char_stats(rows):
 
 
 @bp.get("/stats")
-@login_required("trener", "zak")
+@login_required(ROLE_COACH, ROLE_STUDENT)
 def stats_get():
     rows = get_db().execute(
-        "SELECT at, detail FROM (SELECT at, detail FROM lessons WHERE user_id = ? AND mode = 'znak' ORDER BY at DESC LIMIT ?) "
-        "ORDER BY at", (g.user["id"], STATS_LESSONS)).fetchall()
+        "SELECT at, detail FROM (SELECT at, detail FROM lessons WHERE user_id = ? AND mode = ? ORDER BY at DESC LIMIT ?) "
+        "ORDER BY at", (g.user["id"], MODE_CHAR, STATS_LESSONS)).fetchall()
     return jsonify(lessons=len(rows), chars=char_stats(rows))
 
 
-# ================= trenér (M4): dotazník, plán, úroveň =================
+# ================= coach (M4): questionnaire, plan, level =================
 def coach_row(db, uid):
     r = db.execute("SELECT archetype, modifiers, prefs, answered_at, ulevel, ulevel_at FROM coach WHERE user_id = ?",
                    (uid,)).fetchone()
@@ -730,32 +803,32 @@ def coach_row(db, uid):
 
 
 @bp.get("/coach/questions")
-@login_required("trener", "zak")
+@login_required(ROLE_COACH, ROLE_STUDENT)
 def coach_questions():
     return jsonify(questions=coach.questions_json())
 
 
 @bp.post("/coach/profile")
-@login_required("trener", "zak")
+@login_required(ROLE_COACH, ROLE_STUDENT)
 def coach_profile():
-    """Odpovědi → archetyp + modifikátory + preference. Odpovědi se neukládají (mohou být citlivé)."""
+    """Answers → archetype + modifiers + preferences. The answers are not stored (they may be sensitive)."""
     d = body()
     if not isinstance(d.get("answers"), dict):
-        return err("Chybí odpovědi.")
+        return err(t("err.noAnswers"))
     p = coach.profile_from_answers(d["answers"])
-    t = iso(now())
+    ts = iso(now())
     db = get_db()
     db.execute("INSERT INTO coach (user_id, archetype, modifiers, prefs, answered_at, updated_at) VALUES (?,?,?,?,?,?) "
                "ON CONFLICT(user_id) DO UPDATE SET archetype = excluded.archetype, modifiers = excluded.modifiers, "
                "prefs = excluded.prefs, answered_at = excluded.answered_at, updated_at = excluded.updated_at",
-               (g.user["id"], p["archetype"], json.dumps(p["modifiers"]), json.dumps(p["prefs"]), t, t))
+               (g.user["id"], p["archetype"], json.dumps(p["modifiers"]), json.dumps(p["prefs"]), ts, ts))
     return jsonify(coach_info(db, g.user["id"]))
 
 
 def coach_info(db, uid):
     c = coach_row(db, uid)
-    c["archetypeName"] = coach.ARCHETYPES[c["archetype"]][0] if c["archetype"] in coach.ARCHETYPES else None
-    c["modifierNames"] = [coach.MODIFIERS[m] for m in c["modifiers"] if m in coach.MODIFIERS]
+    c["archetypeName"] = coach.archetype_name(c["archetype"])
+    c["modifierNames"] = [coach.modifier_name(m) for m in c["modifiers"] if m in coach.MODIFIERS]
     lessons = [dict(r) for r in db.execute(
         "SELECT at, mode, level, dur_s, trials, acc, ttr, wpm, fwpm, device, detail FROM lessons WHERE user_id = ? ORDER BY at",
         (uid,)).fetchall()]
@@ -764,15 +837,15 @@ def coach_info(db, uid):
     c["level"] = level
     c["plan"] = coach.plan_estimate(lessons, level, c["archetype"], c["prefs"])
     lv = coach.level_info(lessons, level, c["ulevel"])
-    if lv["ulevel"] > c["ulevel"]:  # dosažená úroveň se uloží (zpět jen resetem výcviku)
-        t = iso(now())
+    if lv["ulevel"] > c["ulevel"]:  # the reached level is stored (back only by a training reset)
+        ts = iso(now())
         db.execute("INSERT INTO coach (user_id, ulevel, ulevel_at, updated_at) VALUES (?,?,?,?) "
                    "ON CONFLICT(user_id) DO UPDATE SET ulevel = excluded.ulevel, ulevel_at = excluded.ulevel_at, "
-                   "updated_at = excluded.updated_at", (uid, lv["ulevel"], t, t))
-        c["ulevel"], c["ulevel_at"], c["ulevelNew"] = lv["ulevel"], t, True
+                   "updated_at = excluded.updated_at", (uid, lv["ulevel"], ts, ts))
+        c["ulevel"], c["ulevel_at"], c["ulevelNew"] = lv["ulevel"], ts, True
     c["levelInfo"] = lv
     c["plateau"] = coach.plateau(lessons, level)
-    # M6: tempo (Farnsworth / rychlost znaku). Změnu trenér rovnou zapíše do nastavení, pokud ji uživatel nevypnul.
+    # M6: pace (Farnsworth / character speed). The coach writes a change straight into the settings unless the user turned it off.
     srow = db.execute("SELECT data FROM settings WHERE user_id = ?", (uid,)).fetchone()
     sdata = json.loads(srow["data"]) if srow else {}
     cur = {"wpm": sdata.get("wpm", 20), "fwpm": sdata.get("fwpm", 15)}
@@ -780,52 +853,52 @@ def coach_info(db, uid):
     sp["auto"] = sdata.get("autoSpeed", 1) != 0
     if sp["change"] and sp["auto"]:
         merged = {**sdata, **clean_settings(sp["change"]["to"])}
-        t = iso(now())
+        ts = iso(now())
         db.execute("INSERT INTO settings (user_id, data, updated_at) VALUES (?,?,?) "
                    "ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-                   (uid, json.dumps(merged), t))
+                   (uid, json.dumps(merged), ts))
         sp["change"]["applied"] = True
     elif sp["change"]:
-        sp["wpm"], sp["fwpm"] = cur["wpm"], cur["fwpm"]  # jen návrh – nastavení zůstává
-        sp["tempo"] = coach._tempo(cur["wpm"], cur["fwpm"])
+        sp["wpm"], sp["fwpm"] = cur["wpm"], cur["fwpm"]  # only a proposal – the settings stay
+        sp["tempo"] = coach.tempo_text(cur["wpm"], cur["fwpm"])
         sp["change"]["applied"] = False
     c["speed"] = sp
-    c["copy"] = coach.copy_advice(lessons, c["ulevel"])  # M7: příjem ve skluzu (U3)
+    c["copy"] = coach.copy_advice(lessons, c["ulevel"])  # M7: copy behind (U3)
     c["dashboard"] = coach.dashboard(lessons, level, c["prefs"], now().timestamp() * 1000)
     return c
 
 
 @bp.get("/coach")
-@login_required("trener", "zak")
+@login_required(ROLE_COACH, ROLE_STUDENT)
 def coach_get():
     return jsonify(coach_info(get_db(), g.user["id"]))
 
 
-# ================= reset výcviku =================
+# ================= training reset =================
 @bp.post("/training/reset")
-@login_required("trener", "zak")
+@login_required(ROLE_COACH, ROLE_STUDENT)
 def training_reset_own():
     db = get_db()
     row = db.execute("SELECT pw_hash FROM users WHERE id = ?", (g.user["id"],)).fetchone()
     ok, _ = auth.verify_password(row["pw_hash"], str(body().get("password", "")))
     if not ok:
-        return err("Heslo nesouhlasí.", 403)
+        return err(t("err.wrongPassword"), 403)
     return jsonify(epoch=reset_training(db, g.user["id"]))
 
 
 @bp.post("/users/<int:uid>/reset-training")
-@login_required("admin", "trener")
+@login_required(ROLE_ADMIN, ROLE_COACH)
 def training_reset_user(uid):
     db = get_db()
     row = db.execute("SELECT role, invited_by FROM users WHERE id = ?", (uid,)).fetchone()
-    if row is None or (g.user["role"] != "admin" and row["invited_by"] != g.user["id"]):
-        return err("Uživatel nenalezen.", 404)
-    if row["role"] == "admin":
-        return err("Správce nemá výcvik.")
+    if row is None or (g.user["role"] != ROLE_ADMIN and row["invited_by"] != g.user["id"]):
+        return err(t("err.userNotFound"), 404)
+    if row["role"] == ROLE_ADMIN:
+        return err(t("err.adminNoTraining"))
     return jsonify(epoch=reset_training(db, uid))
 
 
-# ================= GDPR: export a smazání =================
+# ================= GDPR: export and deletion =================
 @bp.get("/export")
 @login_required()
 def export():
@@ -835,14 +908,20 @@ def export():
     sessions = db.execute("SELECT device, created_at, last_seen FROM sessions WHERE user_id = ?",
                           (g.user["id"],)).fetchall()
     data = {
-        "export": {"app": "Morse trenažer", "at": iso(now()), "format": 1},
+        "export": {"app": t("app.name"), "at": iso(now()), "format": 1},
         "account": dict(u),
         "sessions": [dict(s) for s in sessions],
         **load_user_data(db, g.user["id"], limit=1_000_000, detail=True),
         "coach": coach_row(db, g.user["id"]),
     }
+    traces = db.execute("SELECT lesson_id, kind, at, data FROM traces WHERE user_id = ? ORDER BY at",
+                        (g.user["id"],)).fetchall()
+    errors = db.execute("SELECT at, data FROM client_errors WHERE user_id = ? ORDER BY at", (g.user["id"],)).fetchall()
+    if traces or errors:  # V1: debug trace (only for accounts with tracing enabled)
+        data["debug"] = {"traces": [{**dict(r), "data": json.loads(r["data"])} for r in traces],
+                         "errors": [{"at": r["at"], **json.loads(r["data"])} for r in errors]}
     resp = Response(json.dumps(data, ensure_ascii=False, indent=1), mimetype="application/json")
-    resp.headers["Content-Disposition"] = 'attachment; filename="morse-trenazer-moje-data.json"'
+    resp.headers["Content-Disposition"] = f'attachment; filename="{t("export.filename")}"'
     return resp
 
 
@@ -853,10 +932,10 @@ def account_delete():
     row = db.execute("SELECT pw_hash, role FROM users WHERE id = ?", (g.user["id"],)).fetchone()
     ok, _ = auth.verify_password(row["pw_hash"], str(body().get("password", "")))
     if not ok:
-        return err("Heslo nesouhlasí.", 403)
-    if row["role"] == "admin" and admins_left(db, g.user["id"]) == 0:
-        return err("Jsi jediný admin – nejdřív jmenuj jiného.")
-    # ON DELETE CASCADE smaže sessions, nastavení, pokrok, lekce i nepoužité pozvánky
+        return err(t("err.wrongPassword"), 403)
+    if row["role"] == ROLE_ADMIN and admins_left(db, g.user["id"]) == 0:
+        return err(t("err.lastAdmin"))
+    # ON DELETE CASCADE deletes sessions, settings, progress, lessons and unused invitations
     db.execute("DELETE FROM users WHERE id = ?", (g.user["id"],))
     resp = jsonify(ok=True)
     auth.clear_cookie(resp)

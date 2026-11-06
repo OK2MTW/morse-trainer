@@ -1,11 +1,11 @@
 #!/bin/bash
 # SPDX-License-Identifier: EUPL-1.2
-# Vytvoří vlastní certifikační autoritu (CA) pro LAN a certifikát serveru.
-# CA je omezená (nameConstraints) jen na domácí síť (MORSE_LAN ze site.env), *.local a localhost,
-# takže i kdyby unikl její klíč, nedá se jí podepsat certifikát pro cizí web (google.com apod.).
-# Spouštět jako root:  sudo deploy/make-certs.sh
+# Creates an own certificate authority (CA) for the LAN and a server certificate.
+# The CA is restricted (nameConstraints) to the home network only (MORSE_LAN from site.env), *.local and localhost,
+# so even if its key leaked, it could not sign a certificate for a foreign site (google.com etc.).
+# Run as root:  sudo deploy/make-certs.sh
 set -euo pipefail
-[[ $EUID -eq 0 ]] || { echo "Spusť přes sudo."; exit 1; }
+[[ $EUID -eq 0 ]] || { echo "Run it with sudo."; exit 1; }
 source "$(dirname "$0")/common.sh"
 ensure_site_env
 load_site_env
@@ -19,7 +19,7 @@ chmod 700 "$PKI"; chmod 755 "$PUB"
 cd "$PKI"
 
 if [[ ! -f ca.key ]]; then
-  echo "== Vytvářím CA (platnost 10 let)"
+  echo "== Creating the CA (valid for 10 years)"
   openssl ecparam -name prime256v1 -genkey -noout -out ca.key
   chmod 600 ca.key
   cat > ca.cnf <<EOF
@@ -38,7 +38,7 @@ EOF
   openssl req -x509 -new -key ca.key -sha256 -days 3650 -config ca.cnf -out ca.crt
 fi
 
-echo "== Vytvářím certifikát serveru (platnost 397 dní)"
+echo "== Creating the server certificate (valid for 397 days)"
 HOST=$(hostname | tr 'A-Z' 'a-z')
 openssl ecparam -name prime256v1 -genkey -noout -out server.key
 chmod 600 server.key
@@ -59,9 +59,9 @@ openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 
   -extfile server.cnf -extensions v3 -out server.crt
 cat server.crt ca.crt > server-chain.crt
 
-# Veřejná část CA ke stažení do telefonu (DER i PEM)
+# Public part of the CA for downloading to a phone (DER and PEM)
 cp ca.crt "$PUB/morse-ca.crt"
 openssl x509 -in ca.crt -outform der -out "$PUB/morse-ca.der.crt"
 chmod 644 "$PUB"/*
-echo "== Hotovo. Otisk CA (SHA-256) – zkontroluj ho v telefonu při instalaci:"
+echo "== Done. CA fingerprint (SHA-256) – check it on the phone during installation:"
 openssl x509 -in ca.crt -noout -fingerprint -sha256

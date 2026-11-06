@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Hesla (argon2id), session cookie, CSRF, role a omezení pokusů o přihlášení."""
+"""Passwords (argon2id), session cookie, CSRF, roles and limiting login attempts."""
 import hashlib
 import os
 import secrets
@@ -13,19 +13,22 @@ from argon2.exceptions import InvalidHashError, VerificationError
 from flask import abort, g, jsonify, request
 
 from server.db import get_db
+from server.i18n import t
 
-# OWASP minimum pro argon2id: m=19 MiB, t=2, p=1. Služba má MemoryMax=120M → hashujeme vždy jen jedno heslo naráz.
+# OWASP minimum for argon2id: m=19 MiB, t=2, p=1. The service has MemoryMax=120M → only one password is hashed at a time.
 _cost = int(os.environ.get("MORSE_ARGON2_MEMORY", 19456))
 PH = PasswordHasher(time_cost=2, memory_cost=_cost, parallelism=1)
 _hash_lock = threading.Semaphore(1)
-# Hash pro „neexistujícího uživatele“, aby odpověď trvala stejně dlouho (neprozradí, zda přezdívka existuje).
+# Hash for a "non-existent user" so that the answer takes the same time (does not reveal whether a nickname exists).
 _DUMMY_HASH = PH.hash(secrets.token_hex(16))
 
-COOKIE = "__Host-sid"  # __Host- = jen Secure, Path=/, bez Domain
-SESSION_DAYS = 90      # klouzavě – telefon s PWA nemá být pořád odhlášený
-ROLES = ("admin", "trener", "zak")
-PW_MIN, PW_MAX = 10, 32   # E3: pravidla hesla (shodně s web/js/pwrules.js)
-LOGIN_PW_MAX = 128        # přihlášení nekrátit na PW_MAX (stará delší hesla, vynucená změna)
+COOKIE = "__Host-sid"  # __Host- = Secure only, Path=/, no Domain
+SESSION_DAYS = 90      # sliding – a phone with the PWA should not be logged out all the time
+# Roles – stored values (DB, API, links), Czech words: administrator "admin", coach "trener", student "zak".
+ROLE_ADMIN, ROLE_COACH, ROLE_STUDENT = "admin", "trener", "zak"
+ROLES = (ROLE_ADMIN, ROLE_COACH, ROLE_STUDENT)
+PW_MIN, PW_MAX = 10, 32   # E3: password rules (same as web/js/pwrules.js)
+LOGIN_PW_MAX = 128        # do not cut a login to PW_MAX (old longer passwords, forced change)
 
 
 def now():
@@ -40,14 +43,14 @@ def sha256(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-# ---------- hesla ----------
+# ---------- passwords ----------
 def hash_password(pw):
     with _hash_lock:
         return PH.hash(pw)
 
 
 def verify_password(pw_hash, pw):
-    """Vrátí (ok, nový_hash_nebo_None) – nový hash, pokud se změnily parametry argon2."""
+    """Returns (ok, new_hash_or_None) – a new hash if the argon2 parameters have changed."""
     with _hash_lock:
         try:
             PH.verify(pw_hash or _DUMMY_HASH, pw)
@@ -59,39 +62,43 @@ def verify_password(pw_hash, pw):
 
 
 def password_rules(pw, nick=None):
-    """E3: seznam nesplněných pravidel (prázdný = heslo vyhovuje). Shodně s web/js/pwrules.js."""
+    """E3: codes of unmet rules (empty = the password is fine). Same as web/js/pwrules.js (RULES[].id)."""
     if not isinstance(pw, str):
         pw = ""
     bad = []
     if not PW_MIN <= len(pw) <= PW_MAX:
-        bad.append(f"{PW_MIN} až {PW_MAX} znaků")
+        bad.append("length")
     if not any(c.islower() for c in pw):
-        bad.append("malé písmeno")
+        bad.append("lower")
     if not any(c.isupper() for c in pw):
-        bad.append("velké písmeno")
+        bad.append("upper")
     if not any(c.isdecimal() for c in pw):
-        bad.append("číslici")
+        bad.append("digit")
     if not any(not c.isalnum() for c in pw):
-        bad.append("speciální znak (např. ! ? - _ . # @)")
+        bad.append("special")
     nick = (nick or "").strip().lower()
     if len(nick) >= 3 and nick in pw.lower():
-        bad.append("neobsahovat přezdívku")
+        bad.append("nick")
     return bad
 
 
 def password_problem(pw, nick=None):
+    """Translated message about unmet password rules, or None."""
     bad = password_rules(pw, nick)
-    return f"Heslo musí mít: {', '.join(bad)}." if bad else None
+    if not bad:
+        return None
+    rules = ", ".join(t(f"pw.rule.{code}", min=PW_MIN, max=PW_MAX) for code in bad)
+    return t("pw.mustHave", rules=rules)
 
 
-# ---------- omezení pokusů (v paměti procesu, doplněk k nginx limit_req) ----------
+# ---------- limiting attempts (in process memory, in addition to nginx limit_req) ----------
 _fails = {}
-_bans = {}   # E3: IP → konec blokace (monotonic)
+_bans = {}   # E3: IP → end of the block (monotonic)
 _fails_lock = threading.Lock()
 FAIL_WINDOW = 15 * 60
-# limit podle předpony klíče: přezdívka přísně (platí i při útoku z mnoha IP), IP volněji (sdílená síť)
+# limit by key prefix: nickname strictly (applies even to an attack from many IPs), IP more loosely (shared network)
 FAIL_LIMITS = {"nick": 8, "ip": 30, "inv": 20}
-BAN_SECONDS = 24 * 3600  # E3: IP, která vyčerpá limit „ip“, je zablokovaná na 24 h
+BAN_SECONDS = 24 * 3600  # E3: an IP that exhausts the "ip" limit is blocked for 24 h
 
 
 def too_many(*keys):
@@ -111,7 +118,7 @@ def too_many(*keys):
 def note_fail(*keys):
     t = time.monotonic()
     with _fails_lock:
-        if len(_fails) > 5000:  # ochrana paměti
+        if len(_fails) > 5000:  # memory protection
             _fails.clear()
         if len(_bans) > 5000:
             for k in [k for k, v in _bans.items() if v <= t]:
@@ -130,8 +137,8 @@ def clear_fails(*keys):
             _fails.pop(k, None)
 
 
-# ---------- veřejný vstup (E3) ----------
-PUBLIC_HEADER = "X-Morse-Entry"  # nginx veřejného vstupu (127.0.0.1:8090) nastaví „public“, klient ho nepodvrhne
+# ---------- public entry (E3) ----------
+PUBLIC_HEADER = "X-Morse-Entry"  # nginx of the public entry (127.0.0.1:8090) sets "public", the client cannot forge it
 
 
 def is_public():
@@ -163,24 +170,24 @@ def clear_cookie(resp):
 
 
 def load_session():
-    """Naplní g.user a g.session podle cookie (nebo None)."""
+    """Fills g.user and g.session from the cookie (or None)."""
     g.user = g.session = None
     token = request.cookies.get(COOKIE)
     if not token or len(token) > 100:
         return
     db = get_db()
     row = db.execute(
-        "SELECT s.*, u.nick, u.role, u.disabled, u.age_group, u.pw_change FROM sessions s JOIN users u ON u.id = s.user_id "
+        "SELECT s.*, u.nick, u.role, u.disabled, u.age_group, u.pw_change, u.debug_log FROM sessions s JOIN users u ON u.id = s.user_id "
         "WHERE s.id_hash = ?", (sha256(token),)).fetchone()
     t = now()
     if row is None or row["expires_at"] < iso(t) or row["disabled"]:
         return
-    if row["role"] == "admin" and is_public():
-        return  # E3: správa jen z domácí sítě
+    if row["role"] == ROLE_ADMIN and is_public():
+        return  # E3: administration only from the home network
     g.session = row
     g.user = {"id": row["user_id"], "nick": row["nick"], "role": row["role"], "age_group": row["age_group"],
-              "pw_change": bool(row["pw_change"])}
-    # klouzavá platnost – zapisujeme nejvýš jednou za hodinu (šetří SD kartu)
+              "pw_change": bool(row["pw_change"]), "debug": bool(row["debug_log"])}
+    # sliding validity – written at most once an hour (saves the SD card)
     if row["last_seen"] < iso(t - timedelta(hours=1)):
         db.execute("UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id_hash = ?",
                    (iso(t), iso(t + timedelta(days=SESSION_DAYS)), row["id_hash"]))
@@ -188,24 +195,24 @@ def load_session():
 
 
 def same_origin():
-    """Požadavky měnící data musí přijít z naší stránky (doplněk k SameSite=Strict)."""
+    """Requests changing data must come from our page (in addition to SameSite=Strict)."""
     origin = request.headers.get("Origin")
     if origin is None:
-        return True  # starší prohlížeče / curl – chrání CSRF token a SameSite
+        return True  # older browsers / curl – protected by the CSRF token and SameSite
     host = request.headers.get("Host", "")
     return origin in (f"https://{host}", f"http://{host}")
 
 
-# 0.8.1: „nepřihlášen / špatné heslo“ = 403 + {"auth": true}, NE 401. Chrome po odpovědi 401 zahodí uložené
-# heslo Basic auth (Pinggy, etapa E2) – i když 401 poslala aplikace – a dokola se ptá na heslo k doméně.
+# 0.8.1: "not logged in / wrong password" = 403 + {"auth": true}, NOT 401. After a 401 response Chrome drops the stored
+# Basic auth password (Pinggy, stage E2) – even when the app sent the 401 – and keeps asking for the domain password.
 AUTH_STATUS = 403
 
 
-def auth_error(msg="Nejsi přihlášený."):
-    return jsonify(error=msg, auth=True), AUTH_STATUS
+def auth_error(msg=None):
+    return jsonify(error=msg or t("err.notLoggedIn"), auth=True), AUTH_STATUS
 
 
-# E3: dokud si uživatel nezmění heslo (pw_change), smí jen tohle
+# E3: until the user changes the password (pw_change), only this is allowed
 PW_CHANGE_ALLOWED = {"api.change_password", "api.logout", "api.logout_all"}
 
 
@@ -216,13 +223,13 @@ def login_required(*roles):
             if g.user is None:
                 return auth_error()
             if g.user["pw_change"] and request.endpoint not in PW_CHANGE_ALLOWED:
-                return jsonify(error="Nejdřív si nastav nové heslo.", pw_change=True), 403
+                return jsonify(error=t("err.pwChangeFirst"), pw_change=True), 403
             if roles and g.user["role"] not in roles:
-                return jsonify(error="Na tohle nemáš oprávnění."), 403
+                return jsonify(error=t("err.forbidden")), 403
             if request.method not in ("GET", "HEAD", "OPTIONS"):
                 sent = request.headers.get("X-CSRF-Token", "")
                 if not secrets.compare_digest(sent, g.session["csrf"]):
-                    return jsonify(error="Neplatný CSRF token – obnov stránku."), 403
+                    return jsonify(error=t("err.csrf")), 403
             return fn(*a, **kw)
         return wrapper
     return deco

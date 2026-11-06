@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""E2: kontrola nasazovacích souborů veřejného přístupu (Pinggy) – nic nesmí poslouchat ven, žádná tajemství v gitu."""
+"""E2: checks of the deployment files for public access (Pinggy) – nothing may listen outside, no secrets in git."""
 import re
 import unittest
 from pathlib import Path
@@ -11,7 +11,7 @@ UNIT = (ROOT / 'deploy/morse-pinggy.service').read_text(encoding='utf-8')
 
 class TestPinggyDeploy(unittest.TestCase):
     def public_block(self):
-        i = NGINX.index('E2/E3: veřejný přístup přes Pinggy')
+        i = NGINX.index('E2/E3: public access via Pinggy')
         return NGINX[i:]
 
     def test_public_listener_localhost_only(self):
@@ -29,21 +29,21 @@ class TestPinggyDeploy(unittest.TestCase):
         self.assertIn('-R0:127.0.0.1:8090', UNIT)
         self.assertEqual(len(re.findall(r'-R\S+', UNIT)), 1)
         self.assertIn('EnvironmentFile=/etc/morse-trainer/pinggy.env', UNIT)
-        self.assertIn('${PINGGY_TOKEN}@', UNIT)   # token jen z env souboru
-        self.assertNotIn('b:', UNIT)               # žádné heslo na Pinggy (Chrome by ho při instalaci PWA neposlal)
-        self.assertIn(' x:https', UNIT)           # jen HTTPS na straně Pinggy
-        self.assertIn('User=@USER@', UNIT)        # doplní deploy/common.sh při instalaci
+        self.assertIn('${PINGGY_TOKEN}@', UNIT)   # the token only from the env file
+        self.assertNotIn('b:', UNIT)               # no password on Pinggy (Chrome would not send it when installing the PWA)
+        self.assertIn(' x:https', UNIT)           # only HTTPS on the Pinggy side
+        self.assertIn('User=@USER@', UNIT)        # filled in by deploy/common.sh on installation
 
     def test_no_shared_password(self):
-        # E3: přihlášení chrání jen účty aplikace (žádné sdílené heslo, žádné výjimky)
+        # E3: login is protected only by the app accounts (no shared password, no exceptions)
         b = self.public_block()
         self.assertNotIn('auth_basic', b)
-        self.assertIn('include /etc/morse-trainer/pinggy-host.map;', b)   # jméno z konfigurace, ne z gitu
-        self.assertIn('zone=morse_pub_auth_all', b)                      # strop přihlášení ze všech IP
+        self.assertIn('include /etc/morse-trainer/pinggy-host.map;', b)   # the name from the configuration, not from git
+        self.assertIn('zone=morse_pub_auth_all', b)                      # a cap on logins from all IPs
         self.assertIn('limit_conn morse_pub_conn_all', b)
         proxy = (ROOT / 'deploy/pinggy-proxy.conf').read_text()
         self.assertIn('proxy_set_header X-Morse-Entry public;', proxy)
-        lan = NGINX[:NGINX.index('E2/E3: veřejný přístup')]
+        lan = NGINX[:NGINX.index('E2/E3: public access')]
         self.assertEqual(lan.count('proxy_pass'), lan.count('proxy_set_header X-Morse-Entry "";'))
 
     def test_install_ships_proxy_headers(self):
@@ -51,7 +51,7 @@ class TestPinggyDeploy(unittest.TestCase):
 
 
     def test_app_never_returns_401(self):
-        # 0.8.1: 401 vyvolá v prohlížeči dotaz na heslo k doméně – nepřihlášen = 403 + auth
+        # 0.8.1: a 401 makes the browser ask for a password for the domain – not logged in = 403 + auth
         for f in (ROOT / 'server').glob('*.py'):
             self.assertNotRegex(f.read_text(encoding='utf-8'), r'(,|=)\s*401\b', f.name)
 

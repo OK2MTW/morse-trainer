@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Trenér nad lekcemi (M4, bez DOM): potvrzení postupu, zátěž a sezení, dotazník → archetyp, kalibrace, úrovně, plato.
-// !!! Python port v tests/coach.py musí zůstat shodný (konstanty a tabulky čte regexem, hlídá tests/test_coach.py).
+// Coach over lessons (M4, no DOM): confirmation of advancing, load and sessions, questionnaire → archetype, calibration, levels, plateau.
+// !!! The Python port in tests/coach.py must stay identical (it reads constants and tables by regex, checked by tests/test_coach.py).
 
-// ---- potvrzení postupu v dalším sezení (R1: upevnění spánkem) ----
-export const CONFIRM_GAP_H = 3;       // další sezení = aspoň 3 h od první lekce s nejnovějším znakem
-export const CONFIRM_FROM_LEVEL = 5;  // první 3 přidané znaky (kalibrace, Koch: 4–5 znaků za 30–60 min) bez čekání
+// ---- confirming progress in the next session (R1: consolidation by sleep) ----
+export const CONFIRM_GAP_H = 3;       // next session = at least 3 h after the first lesson with the newest character
+export const CONFIRM_FROM_LEVEL = 5;  // the first 3 added characters (calibration, Koch: 4–5 characters in 30–60 min) without waiting
 
 /**
- * Smí se přidat další znak? Postup v lekci (advanceCheck) musí platit v jiném sezení, než kdy byl nejnovější
- * znak přidán. history = [{at, level}] včetně právě dokončené lekce, now = ms.
- * Vrací {ok, reason: null | 'confirm', firstAt, waitH}.
+ * May the next character be added? Advancing in a lesson (advanceCheck) must hold in a different session than the one
+ * where the newest character was added. history = [{at, level}] including the lesson just finished, now = ms.
+ * Returns {ok, reason: null | 'confirm', firstAt, waitH}.
  */
 export function confirmGate(history, level, now) {
   if (level < CONFIRM_FROM_LEVEL) return { ok: true, reason: null, firstAt: null, waitH: 0 };
@@ -20,18 +20,18 @@ export function confirmGate(history, level, now) {
   return { ok: false, reason: 'confirm', firstAt, waitH: Math.round((CONFIRM_GAP_H - ageH) * 10) / 10 };
 }
 
-// ---- zátěž a sezení (R1 kap. 3) ----
-export const BLOCK_MAX_MIN = 10;      // lekce = blok 5–10 min (delší nastavení se zkrátí)
-export const SESSION_BREAK_MIN = 20;  // pauza ≥ 20 min ukončí sezení
-export const SESSION_END_MIN = 30;    // po 30 min sezení navrhnout konec
-export const DAY_WARN_MIN = 60;       // nad 60 min denně upozornit (nezakazovat)
-export const WARMUP_S = 90;           // rozcvička 1–2 min na začátku sezení = měření zapamatování
-export const FATIGUE_TTR = 1.25;      // únava: medián TTR +25 % proti začátku …
-export const FATIGUE_ACC_DROP = 0.1;  // … nebo úspěšnost o 10 p. b. nižší (plná detekce v M5)
+// ---- load and sessions (R1 ch. 3) ----
+export const BLOCK_MAX_MIN = 10;      // lesson = a block of 5–10 min (a longer setting is shortened)
+export const SESSION_BREAK_MIN = 20;  // a break ≥ 20 min ends the session
+export const SESSION_END_MIN = 30;    // suggest stopping after a 30 min session
+export const DAY_WARN_MIN = 60;       // warn above 60 min a day (do not forbid)
+export const WARMUP_S = 90;           // warm-up of 1–2 min at the start of a session = retention measurement
+export const FATIGUE_TTR = 1.25;      // fatigue: median TTR +25 % compared with the start …
+export const FATIGUE_ACC_DROP = 0.1;  // … or accuracy 10 points lower (full detection in M5)
 
 /**
- * Zátěž z historie lekcí [{at (konec lekce, ISO), durS}]. now a dayStart (místní půlnoc) v ms.
- * Vrací {sessionMin, dayMin, gapH (od poslední lekce, null = žádná), newSession, suggestEnd, dayWarn}.
+ * Load from the lesson history [{at (end of the lesson, ISO), durS}]. now and dayStart (local midnight) in ms.
+ * Returns {sessionMin, dayMin, gapH (since the last lesson, null = none), newSession, suggestEnd, dayWarn}.
  */
 export function sessionLoad(history, now, dayStart) {
   const ls = history.map((h) => ({ end: Date.parse(h.at), dur: (h.durS || 0) * 1000 }))
@@ -57,7 +57,7 @@ export function sessionLoad(history, now, dayStart) {
   };
 }
 
-/** Rozcvička: souhrn prvních pokusů sezení [{ok, ttr}] → {n, acc, ttr, gapH} pro detail lekce (nebo null). */
+/** Warm-up: summary of the first trials of a session [{ok, ttr}] → {n, acc, ttr, gapH} for the lesson detail (or null). */
 export function warmupStats(trials, gapH) {
   if (!trials.length) return null;
   const ok = trials.filter((t) => t.ok && t.ttr != null).map((t) => t.ttr).sort((a, b) => a - b);
@@ -70,8 +70,8 @@ export function warmupStats(trials, gapH) {
 }
 
 /**
- * Příprava detekce únavy (M5): base a cur = {acc, ttr} (začátek sezení vs. posledních ~20 odpovědí).
- * Vrací {tired, ttrUp (poměr), accDrop (p. b. jako podíl)} – zda signál trvá > 1 min, řeší až M5.
+ * Fatigue detection groundwork (M5): base and cur = {acc, ttr} (start of the session vs. the last ~20 answers).
+ * Returns {tired, ttrUp (ratio), accDrop (points as a fraction)} – whether the signal lasts > 1 min is handled in M5.
  */
 export function fatigueSignal(base, cur) {
   if (!base || !cur || base.acc == null || cur.acc == null) return { tired: false, ttrUp: null, accDrop: null };
@@ -80,22 +80,22 @@ export function fatigueSignal(base, cur) {
   return { tired: (ttrUp !== null && ttrUp >= FATIGUE_TTR) || accDrop >= FATIGUE_ACC_DROP - 1e-9, ttrUp, accDrop };
 }
 
-// ---- průběžná detekce únavy v lekci (M5, R1 kap. 3) ----
-export const FATIGUE_BASE_N = 30;      // základ = prvních 30 pokusů sezení (bez rozcvičky)
-export const FATIGUE_WIN_N = 20;       // aktuální stav = posledních 20 pokusů
-export const FATIGUE_HOLD_S = 60;      // signál musí trvat > 1 min čistého času lekce
-export const FATIGUE_ACC_FLOOR = 0.8;  // pokles úspěšnosti platí jen pod pásmem 80–90 % (regulace obtížnosti hýbe úspěšností v pásmu)
-export const FATIGUE_SNOOZE_S = 180;   // po „pokračovat“ další návrh nejdřív za 3 min
-export const REWARM_PAUSE_MIN = 3;     // pauza v lekci ≥ 3 min → krátká rozcvička
-export const REWARM_S = 30;            // … 30 s jen známými znaky, do únavy se nepočítá
+// ---- continuous fatigue detection in a lesson (M5, R1 ch. 3) ----
+export const FATIGUE_BASE_N = 30;      // baseline = the first 30 trials of the session (without the warm-up)
+export const FATIGUE_WIN_N = 20;       // current state = the last 20 trials
+export const FATIGUE_HOLD_S = 60;      // the signal must last > 1 min of net lesson time
+export const FATIGUE_ACC_FLOOR = 0.8;  // an accuracy drop only counts below the 80–90 % band (difficulty control moves accuracy within the band)
+export const FATIGUE_SNOOZE_S = 180;   // after "continue" the next proposal at the earliest in 3 min
+export const REWARM_PAUSE_MIN = 3;     // a break in a lesson ≥ 3 min → a short warm-up
+export const REWARM_S = 30;            // … 30 s of known characters only, not counted for fatigue
 
-export const FATIGUE_REF_MIN_N = 5;   // 0.8.4: referenční reakce znaku z dlouhodobé statistiky od N pokusů
-export const FATIGUE_REL_MIN = 8;     // … a relativní TTR v okně/základu aspoň z N pokusů (jinak bez TTR signálu)
+export const FATIGUE_REF_MIN_N = 5;   // 0.8.4: reference reaction of a character from long-term statistics from N trials
+export const FATIGUE_REL_MIN = 8;     // … and relative TTR in the window/baseline from at least N trials (otherwise no TTR signal)
 
 /**
- * 0.8.4 (deník #1): TTR pokusu jako poměr k dlouhodobé reakci na STEJNÝ znak (v promile).
- * Mix znaků (rychlý nový znak, velikost sady) tak netvoří falešnou únavu. Nový znak se nepočítá
- * (zpomalení = učení, ne únava). ref = null → původní TTR v ms.
+ * 0.8.4 (log #1): TTR of a trial as a ratio to the long-term reaction to the SAME character (per mille).
+ * The character mix (a fast new character, set size) thus does not create false fatigue. The new character does not
+ * count (slowing down = learning, not fatigue). ref = null → the original TTR in ms.
  */
 function trialTtr(t, ref, newChar) {
   if (!t.ok || t.ttr == null) return null;
@@ -112,7 +112,7 @@ function partStats(ts, ref = null, newChar = null) {
   return { acc: ts.filter((t) => t.ok).length / ts.length, ttr, n: ts.length, ...(ref ? { rel: true } : {}) };
 }
 
-/** Referenční reakce znaků z dlouhodobé statistiky {ch: {n, ttr}} → {ch: ttr} nebo null (nováček). */
+/** Reference reactions of characters from long-term statistics {ch: {n, ttr}} → {ch: ttr} or null (beginner). */
 export function fatigueRef(prior) {
   const ref = {};
   for (const [c, p] of Object.entries(prior || {})) if (p && p.ttr && p.n >= FATIGUE_REF_MIN_N) ref[c] = p.ttr;
@@ -120,19 +120,19 @@ export function fatigueRef(prior) {
 }
 
 /**
- * Hlídání únavy během sezení. base = základ z dřívější lekce téhož sezení ({acc, ttr, n}) nebo null.
- * add() po každém pokusu (activeS = čistý čas lekce v s, count = false pro rozcvičku) vrací
- * {propose, kind ('ttr'|'acc'|null), ttrUp, accDrop}. reset() po pauze, snooze() po „pokračovat“.
+ * Fatigue watch during a session. base = baseline from an earlier lesson of the same session ({acc, ttr, n}) or null.
+ * add() after each trial (activeS = net lesson time in s, count = false for the warm-up) returns
+ * {propose, kind ('ttr'|'acc'|null), ttrUp, accDrop}. reset() after a pause, snooze() after "continue".
  */
 export class FatigueMonitor {
-  /** opts = {ref (fatigueRef), newChar}; základ z jiného režimu (ms × poměr) se nepřebírá. */
+  /** opts = {ref (fatigueRef), newChar}; a baseline from another mode (ms × ratio) is not taken over. */
   constructor(base = null, { ref = null, newChar = null } = {}) {
     this.ref = ref;
     this.newChar = newChar;
     this.base = base && base.n >= FATIGUE_BASE_N && !!base.rel === !!ref ? base : null;
     this.baseTrials = [];
     this.win = [];
-    this.since = null;     // od kdy (activeS) signál trvá
+    this.since = null;     // since when (activeS) the signal lasts
     this.snoozeUntil = 0;
     this.last = { tired: false, held: false, ttrUp: null, accDrop: null };
   }
@@ -159,7 +159,7 @@ export class FatigueMonitor {
     this.last = { tired: ttrTired || accTired, held: false, ttrUp: f.ttrUp, accDrop: f.accDrop };
     if (!this.last.tired) { this.since = null; return none; }
     if (this.since === null) this.since = activeS;
-    this.last.held = activeS - this.since > FATIGUE_HOLD_S; // 0.8.4: závěrečná hláška jen při trvajícím signálu
+    this.last.held = activeS - this.since > FATIGUE_HOLD_S; // 0.8.4: the final message only with a lasting signal
     const propose = this.last.held && activeS >= this.snoozeUntil;
     return { propose, kind: ttrTired ? 'ttr' : 'acc', ttrUp: f.ttrUp, accDrop: f.accDrop };
   }

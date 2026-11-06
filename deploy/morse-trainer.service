@@ -12,7 +12,7 @@ Restart=on-failure
 RestartSec=3
 MemoryMax=120M
 
-# Zpevnění: služba smí zapisovat jen do data/
+# Hardening: the service may write only to data/
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true

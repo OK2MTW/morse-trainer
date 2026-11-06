@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Python port web/js/content.js (obsah lekce ve skluzu, M7 + M8). Konstanty, šablony a seznamy čte z JS."""
+"""Python port of web/js/content.js (content of copy-behind lessons, M7 + M8). Constants, templates and lists are read from the JS."""
 import re
 from pathlib import Path
 

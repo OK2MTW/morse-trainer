@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Python port web/js/copy.js (příjem ve skluzu, M7 + M8) – zarovnání, skluz, výsledky slov, únava.
-Při změně copy.js upravit i tuto kopii (test_copy.py hlídá konstanty)."""
+"""Python port of web/js/copy.js (copy behind, M7 + M8) – alignment, lag, word results, fatigue.
+When copy.js changes, update this copy too (test_copy.py checks the constants)."""
 import math
 import re
 from pathlib import Path
@@ -167,7 +167,7 @@ def lesson_summary(rounds):
             'rounds': len(rounds), 'confusions': confusions[:30]}
 
 
-# ---------- únava ve skluzu (M8) ----------
+# ---------- fatigue in copy behind (M8) ----------
 def round_stats(lst):
     ok, n, ins, d = (sum(x[k] for x in lst) for k in ('ok', 'n', 'ins', 'del'))
     return {'acc': ok / (n + ins) if n + ins else 0, 'miss': d / n if n else 0, 'n': n}
@@ -214,9 +214,9 @@ class CopyFatigue:
         return {'propose': propose, 'kind': 'acc' if acc_t else 'miss', 'accDrop': acc_drop, 'missUp': miss_up}
 
 
-# ---------- simulace řádku (pro testy): vyslané znaky s časy konce, písař se skluzem ----------
+# ---------- line simulation (for tests): sent characters with end times, a typist with a lag ----------
 def stream(words, char_ms=400, gap_ms=180, word_ms=1200):
-    """Zjednodušené časy konců znaků pro proud slov."""
+    """Simplified end times of characters for a stream of words."""
     chars, t = [], 0
     for w, wd in enumerate(words):
         for i, ch in enumerate(wd):

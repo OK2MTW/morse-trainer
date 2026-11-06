@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Radioamatérské zkratky a Q-kódy pro příjem ve skluzu (M8, úroveň U4). Veřejné provozní konvence,
-// seznam sestaven pro projekt. Jen znaky sady projektu, bez prozatímních znaků (prosignů).
+// Amateur radio abbreviations and Q codes for copy behind (M8, level U4). Public operating conventions,
+// the list was compiled for the project. Only characters of the project's set, no ad-hoc characters (prosigns).
 export const ABBR = `
 QRL QRM QRN QRO QRP QRQ QRS QRT QRU QRV QRX QRZ QSB QSL QSO QSY QTH QSK QRG QRK
 CQ DE TU TNX TKS FB OM YL UR RST NAME OP WX RIG ANT PWR ES ABT AGN BCNU CUL GM GA GE GN GL HPE HI

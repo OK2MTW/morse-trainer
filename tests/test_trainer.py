@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Testy logiky trenéra (Python port drill.js) – simulace Kochova postupu, váhy, rozlišování."""
+"""Tests of the trainer logic (Python port of drill.js) – simulation of Koch progression, weights, discrimination."""
 import random
 import unittest
 
@@ -21,7 +21,7 @@ class TestTables(unittest.TestCase):
         self.assertAlmostEqual(T.ADVANCE_ACCURACY, 0.9)
         self.assertEqual(T.NEW_MIN_N, 8)
         self.assertEqual(T.DISCRIM_TRIALS, 12)
-        # všechny konstanty z JS jsou v portu použité
+        # all constants from the JS are used in the port
         for name in T.CONSTS:
             self.assertTrue(hasattr(T, name), name)
 
@@ -62,7 +62,7 @@ class TestAdvance(unittest.TestCase):
         self.assertEqual(d.advance_check()['reason'], 'acc')
 
     def test_new_char_weak(self):
-        # celkově přes 90 %, ale nový znak jen ~60 %
+        # over 90 % overall, but the new character only ~60 %
         hits = 0
         for seed in range(20):
             d = simulate(8, 1.0, lambda c: 600, random.Random(seed), new_p_ok=0.6, n=80)
@@ -78,7 +78,7 @@ class TestAdvance(unittest.TestCase):
         self.assertEqual(r['newTtr'], 1500)
 
     def test_new_char_frequent(self):
-        # nový znak má zaznít častěji než průměrný znak
+        # the new character should sound more often than an average character
         counts = {}
         for seed in range(10):
             d = simulate(10, 0.95, lambda c: 600, random.Random(seed), n=100)
@@ -98,7 +98,7 @@ class TestPrior(unittest.TestCase):
     def test_prior_weights(self):
         prior = {'K': {'n': 50, 'acc': 0.98, 'ttr': 500},
                  'M': {'n': 50, 'acc': 0.6, 'ttr': 1200},
-                 'U': {'n': 2, 'acc': 0.0, 'ttr': 3000}}  # málo dat → výchozí odhad
+                 'U': {'n': 2, 'acc': 0.0, 'ttr': 3000}}  # few data → default estimate
         d = T.Drill(['K', 'M', 'U'], prior=prior)
         self.assertAlmostEqual(d.prior_err('K'), 0.02)
         self.assertAlmostEqual(d.prior_err('U'), T.DEFAULT_ERR)
@@ -141,7 +141,7 @@ class TestDiscrim(unittest.TestCase):
         known = T.chars_for_level(28)
         c = T.pick_contrasts('H', known)
         self.assertEqual(len(c), 2)
-        self.assertEqual(c, ['5', 'V'])  # shoda vzdálenosti 1 (S, 5, V) → později naučené
+        self.assertEqual(c, ['5', 'V'])  # a tie at distance 1 (S, 5, V) → the later learned ones
         for x in c:
             self.assertLessEqual(T.code_distance('H', x), 1)
 
@@ -173,7 +173,7 @@ if __name__ == '__main__':
 
 
 class TestM4Mix(unittest.TestCase):
-    """Krok 1 M4: úprava M3 podle R1."""
+    """M4 step 1: adjustment of M3 according to R1."""
 
     def test_min_wpm(self):
         self.assertEqual(T.MIN_WPM, 12)
@@ -181,19 +181,19 @@ class TestM4Mix(unittest.TestCase):
         self.assertIn('data-key="wpm" data-min="12"', html)
 
     def test_similar_pairs_late(self):
-        # malá sada (< 1/3): S proti H/5/V ne, když je nezaměňuje
+        # small set (< 1/3): S not against H/5/V when they are not confused
         known = ['K', 'M', 'U', 'R', 'E', 'S', 'N', 'A', 'P', 'T', 'L', 'W', 'I', 'H', 'V']
         c = T.pick_contrasts('H', known, set_size=len(known))
         for x in c:
             self.assertGreater(T.code_distance('H', x), 1, c)
-        # skutečná záměna má přednost i v malé sadě
+        # a real confusion wins even in a small set
         self.assertEqual(T.pick_contrasts('H', known, {'S': 2}, set_size=len(known))[0], 'S')
-        # od 1/3 sady nejpodobnější
+        # from 1/3 of the set the most similar ones
         c = T.pick_contrasts('H', known, set_size=T.DISCRIM_SIMILAR_FROM)
         self.assertLessEqual(T.code_distance('H', c[0]), 1)
 
     def test_similar_fallback(self):
-        # jen podobné znaky k dispozici → raději podobné než žádné
+        # only similar characters available → similar ones rather than none
         self.assertEqual(T.pick_contrasts('H', ['S', 'H'], set_size=5), ['S'])
 
     def _mix_share(self, n_master, n_weak, seed=0):
@@ -208,7 +208,7 @@ class TestM4Mix(unittest.TestCase):
             ch = d.next()
             cnt += ch in master
             d.record(ch, ch, 600)
-            d.trials = d.trials[-12:]  # stabilní okno (bez vlivu lekce)
+            d.trials = d.trials[-12:]  # a stable window (without the influence of the lesson)
         return cnt / n
 
     def test_maintain_share_capped(self):
@@ -224,11 +224,11 @@ class TestM4Mix(unittest.TestCase):
         prior = {'K': {'n': 30, 'acc': 0.95, 'ttr': 500}, 'M': {'n': 10, 'acc': 1, 'ttr': 500}}
         d = T.Drill(['K', 'M', 'U'], 'U', prior=prior)
         self.assertTrue(d.is_mastered('K'))
-        self.assertFalse(d.is_mastered('M'))   # málo dat
-        self.assertFalse(d.is_mastered('U'))   # nový znak
+        self.assertFalse(d.is_mastered('M'))   # few data
+        self.assertFalse(d.is_mastered('U'))   # new character
         d.record('K', 'M', None)
         d.record('K', 'M', None)
-        self.assertFalse(d.is_mastered('K'))   # v lekci 2 chyby
+        self.assertFalse(d.is_mastered('K'))   # 2 errors in the lesson
 
     def test_new_char_scattered(self):
         for seed in range(10):
@@ -258,7 +258,7 @@ def run_student(skill, reg, seed, n=300):
 
 
 class TestRegulation(unittest.TestCase):
-    """Krok 2 M4: smyčka a – cíl ~85 %, pásmo 80–90 %."""
+    """M4 step 2: loop a – target ~85 %, band 80–90 %."""
 
     def test_band_constants(self):
         self.assertAlmostEqual(T.BAND_LO, 0.8)
@@ -333,7 +333,7 @@ class TestExclude(unittest.TestCase):
 
 
 class TestGapEase(unittest.TestCase):
-    """M6: prodloužení mezer v lekci až po vyčerpání ulehčení mixem."""
+    """M6: lengthening of gaps in a lesson only after easing by the mix is exhausted."""
 
     def test_struggling_gets_longer_gaps_then_floor(self):
         d = T.Drill(T.chars_for_level(6), 'S', rng=random.Random(7).random)
@@ -343,7 +343,7 @@ class TestGapEase(unittest.TestCase):
         self.assertEqual(d.gap_ease, T.GAP_EASE_MAX)
         self.assertEqual(d.lesson_fwpm(15), 15 - T.GAP_EASE_STEP * T.GAP_EASE_MAX)
         self.assertEqual(d.lesson_fwpm(6), T.FW_MIN)
-        # krok mezer až po dosažení DIFF_MIN
+        # a gap step only after reaching DIFF_MIN
         first_gap = d.gap_log[0][0]
         first_min = next(n for n, v in d.diff_log if v <= T.DIFF_MIN + 1e-9)
         self.assertGreaterEqual(first_gap, first_min)
@@ -375,7 +375,7 @@ class TestGapEase(unittest.TestCase):
 
 
 class TestMix085(unittest.TestCase):
-    """0.8.4 (validace #4, #5): strop nového znaku, záměny zvyšují četnost, srovnání bez nového znaku."""
+    """0.8.4 (validation #4, #5): cap on the new character, confusions increase frequency, comparison without the new character."""
 
     def prior(self, conf=None):
         chars = T.chars_for_level(17)
@@ -401,7 +401,7 @@ class TestMix085(unittest.TestCase):
         chars, p = self.prior()
         sh = self.shares(p, chars)
         self.assertLess(sh[chars[-1]], T.NEW_SHARE_MAX + 0.02)
-        self.assertGreater(sh[chars[-1]], 0.15)  # pořád nejčastější znak
+        self.assertGreater(sh[chars[-1]], 0.15)  # still the most frequent character
         self.assertEqual(max(sh, key=sh.get), chars[-1])
 
     def test_confusions_raise_both_chars(self):
@@ -424,7 +424,7 @@ class TestMix085(unittest.TestCase):
         self.assertGreaterEqual(d.stats[chars[-1]]['n'], 2 * T.NEW_MIN_N)
 
     def test_stable_ttr_ignores_mix(self):
-        # 1. polovina okna: hodně rychlého nového znaku, 2. polovina: staré znaky → prosté TTR „nestabilní“
+        # 1st half of the window: much of the fast new character, 2nd half: old characters → plain TTR "unstable"
         chars, p = self.prior()
         d = T.Drill(chars, chars[-1], prior=p)
         old = chars[:-1]
@@ -432,6 +432,6 @@ class TestMix085(unittest.TestCase):
         win2 = [{'ch': old[i % 16], 'ok': True, 'ttr': 1150} for i in range(20)]
         t1, t2 = d.stable_ttrs(win1, win2)
         self.assertLess(t2 / t1, T.TTR_STABLE_RATIO)
-        d2 = T.Drill(chars, chars[-1])  # bez dlouhodobé statistiky → prosté TTR
+        d2 = T.Drill(chars, chars[-1])  # without long-term statistics → plain TTR
         t1, t2 = d2.stable_ttrs(win1, win2)
         self.assertGreater(t2 / t1, T.TTR_STABLE_RATIO)

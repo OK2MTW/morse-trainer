@@ -1,8 +1,8 @@
 {
-  "name": "Morse venku",
-  "short_name": "Morse venku",
-  "description": "Trenažer příjmu Morseovy abecedy – přístup z internetu (Pinggy)",
-  "lang": "cs",
+  "name": "Morse outside",
+  "short_name": "Morse outside",
+  "description": "Morse code receiving trainer – access from the internet (Pinggy)",
+  "lang": "en",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

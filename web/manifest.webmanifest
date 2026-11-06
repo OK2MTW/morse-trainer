@@ -1,8 +1,8 @@
 {
-  "name": "Morse trenažer",
+  "name": "Morse trainer",
   "short_name": "Morse",
-  "description": "Trenažer příjmu Morseovy abecedy",
-  "lang": "cs",
+  "description": "Morse code receiving trainer",
+  "lang": "en",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

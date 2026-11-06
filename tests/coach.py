@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: EUPL-1.2
-"""Python port web/js/coach.js (trenér nad lekcemi, M4). Konstanty a tabulky čte regexem z JS."""
+"""Python port of web/js/coach.js (coach over lessons, M4). Constants and tables are read from the JS by regex."""
 import re
 from datetime import datetime
 from pathlib import Path

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
-// E3: pravidla hesla – průběžná kontrola při psaní. Server kontroluje totéž (server/auth.py password_rules).
+// E3: password rules – checked while typing. The server checks the same (server/auth.py password_rules).
+import { t } from './i18n.js';
+
 export const PW_MIN = 10;
 export const PW_MAX = 32;
 
@@ -8,47 +10,48 @@ const isUpper = (c) => c !== c.toLowerCase() && c === c.toUpperCase();
 const isDigit = (c) => /\p{Nd}/u.test(c);
 const isSpecial = (c) => !/[\p{L}\p{N}]/u.test(c);
 
+// id = the same rule code as on the server (server/auth.py), text = UI label
 export const RULES = [
-  { text: `${PW_MIN} až ${PW_MAX} znaků`, ok: (pw) => [...pw].length >= PW_MIN && [...pw].length <= PW_MAX },
-  { text: 'malé písmeno (a–z)', ok: (pw) => [...pw].some(isLower) },
-  { text: 'velké písmeno (A–Z)', ok: (pw) => [...pw].some(isUpper) },
-  { text: 'číslici (0–9)', ok: (pw) => [...pw].some(isDigit) },
-  { text: 'speciální znak (např. ! ? - _ . # @)', ok: (pw) => [...pw].some(isSpecial) },
-  { text: 'neobsahuje přezdívku', ok: (pw, nick) => !nick || nick.length < 3 || !pw.toLowerCase().includes(nick.toLowerCase()) },
+  { id: 'length', text: () => t('pw.rule.length', { min: PW_MIN, max: PW_MAX }), ok: (pw) => [...pw].length >= PW_MIN && [...pw].length <= PW_MAX },
+  { id: 'lower', text: () => t('pw.rule.lower'), ok: (pw) => [...pw].some(isLower) },
+  { id: 'upper', text: () => t('pw.rule.upper'), ok: (pw) => [...pw].some(isUpper) },
+  { id: 'digit', text: () => t('pw.rule.digit'), ok: (pw) => [...pw].some(isDigit) },
+  { id: 'special', text: () => t('pw.rule.special'), ok: (pw) => [...pw].some(isSpecial) },
+  { id: 'nick', text: () => t('pw.rule.nick'), ok: (pw, nick) => !nick || nick.length < 3 || !pw.toLowerCase().includes(nick.toLowerCase()) },
 ];
 
 /**
- * Připojí k formuláři seznam pravidel s ✓/✗, kontrolu shody hesel a „Ukázat heslo“.
- * @param {HTMLInputElement} input nové heslo, @param {HTMLInputElement|null} again kontrola,
- * @param {() => string} getNick přezdívka. Vrací funkci valid() → true, když vše platí.
+ * Adds the list of rules with ✓/✗, a check that both passwords match and "Show password" to a form.
+ * @param {HTMLInputElement} input new password, @param {HTMLInputElement|null} again confirmation,
+ * @param {() => string} getNick nickname. Returns a function valid() → true when everything holds.
  */
 export function bindPasswordRules(input, again, getNick) {
   const box = document.createElement('div');
   box.className = 'pw-rules';
   const intro = document.createElement('p');
   intro.className = 'hint';
-  intro.textContent = 'Heslo musí obsahovat:';
+  intro.textContent = t('pw.mustContain');
   const ul = document.createElement('ul');
   const items = RULES.map((r) => {
     const li = document.createElement('li');
-    li.textContent = r.text;
+    li.textContent = r.text();
     ul.append(li);
     return li;
   });
   let matchLi = null;
   if (again) {
     matchLi = document.createElement('li');
-    matchLi.textContent = 'obě hesla jsou stejná';
+    matchLi.textContent = t('pw.rule.match');
     ul.append(matchLi);
   }
   const tip = document.createElement('p');
   tip.className = 'hint';
-  tip.textContent = 'Tip: dvě slova, číslo a znak, třeba Ranni4!Kava (tohle ale nepoužívej). Heslo nepoužívej jinde.';
+  tip.textContent = t('pw.tip');
   const showLbl = document.createElement('label');
   showLbl.className = 'check';
   const showCb = document.createElement('input');
   showCb.type = 'checkbox';
-  showLbl.append(showCb, ' Ukázat heslo');
+  showLbl.append(showCb, ` ${t('pw.show')}`);
   box.append(intro, ul, tip, showLbl);
   (again || input).closest('label').after(box);
 

@@ -8,7 +8,7 @@ nebo počítače instaluje jako PWA a trénovat jde i offline (výsledky se ode�
 
 - účty jen na pozvánku (role správce / trenér / žák), pravidla hesla, hesla argon2id, bez e-mailů a bez sledování
 - zvuk, časování a vyhodnocení běží v prohlížeči, server ukládá výsledky a počítá plán (SQLite)
-- bez externích služeb a CDN (vše hostované na Pi), rozhraní česky
+- bez externích služeb a CDN (vše hostované na Pi), rozhraní česky a anglicky (další jazyk = další soubor)
 
 ## Upozornění – amatérský projekt bez záruk
 - Jde o **amatérský hobby projekt**, který ve volném čase rozvíjí autor **Martin, OK2MTW**, především pro
@@ -19,7 +19,7 @@ nebo počítače instaluje jako PWA a trénovat jde i offline (výsledky se ode�
 - Autor **neřeší dopady na kybernetickou bezpečnost** cizích instalací, nevydává bezpečnostní opravy ani
   upozornění. Kdo aplikaci provozuje, zvlášť s přístupem z internetu, dělá to na vlastní riziko.
 - Vývoj může kdykoli skončit nebo se změnit bez ohlášení a bez zpětné kompatibility.
-- Projekt je **jen v češtině** (rozhraní, dokumentace i komentáře v kódu).
+- Rozhraní je česky a anglicky, kód (identifikátory, komentáře) anglicky, dokumentace česky.
 
 Pokud chcete projekt rozvíjet jinak, udělejte si vlastní kopii (fork) – licence to dovoluje za jejích podmínek.
 
@@ -49,13 +49,15 @@ pro jiné weby (je omezená na domácí síť).
 
 **Správa** (na Pi, jako vlastník adresáře aplikace):
 ```
-.venv/bin/python -m server.admin pozvanka zak "poznámka"   # odkaz s pozvánkou (platí 7 dní, jednou)
-.venv/bin/python -m server.admin uzivatele
-.venv/bin/python -m server.admin obnova PREZDIVKA          # odkaz na nové heslo (zapomenuté heslo)
+.venv/bin/python -m server.admin invite zak "poznámka"     # odkaz s pozvánkou (platí 7 dní, jednou)
+.venv/bin/python -m server.admin users
+.venv/bin/python -m server.admin reset-link PREZDIVKA      # odkaz na nové heslo (zapomenuté heslo)
+.venv/bin/python -m server.admin                           # nápověda ke všem příkazům
 ```
+Původní české názvy příkazů (`pozvanka`, `uzivatele`, `obnova`, `heslo`, `ladeni`…) fungují dál jako aliasy.
 Heslo: 10–32 znaků, malé i velké písmeno, číslice a speciální znak, bez přezdívky (aplikace kontroluje
 při psaní). Zapomenuté heslo: správce nebo trenér vytvoří odkaz na nové heslo (v aplikaci u uživatele nebo
-příkazem `obnova`), trénink zůstane.
+příkazem `reset-link`), trénink zůstane.
 Správce aplikaci spravuje, netrénuje. Trenér vidí své žáky, žák trénuje.
 
 ## Přístup z internetu přes Pinggy (volitelné)
@@ -77,10 +79,25 @@ Přehled přístupů zvenku: `sudo deploy/pinggy-report.sh`.
 **Jiné způsoby provozu na internetu** (vlastní doména, veřejná IP, jiný tunel, reverzní proxy, cloud) jsou možné,
 ale tento kód je neobsahuje. Vyžadují vlastní úpravy nasazení a zabezpečení.
 
+## Jazyky
+Rozhraní je **česky a anglicky**. Výchozí jazyk podle prohlížeče (`cs*` → čeština, jinak angličtina), změna
+v Nastavení nebo na přihlašovací stránce; po přihlášení se volba uloží do účtu a platí na všech zařízeních.
+Texty nejsou v kódu, ale ve slovnících:
+- `web/i18n/<jazyk>.json` – texty prohlížeče (ploché klíče `oblast.klic`, parametry `{nazev}`, množná čísla
+  jako objekt `{"one": …, "few": …, "many": …, "other": …}` podle `Intl.PluralRules`),
+- `server/i18n/<jazyk>.json` – texty serveru (chyby API, dotazník, plán trenéra, úrovně, manifest),
+- `web/i18n/languages.json` – seznam jazyků (kód, vlastní název, locale pro formát čísel a dat).
+
+**Přidání jazyka:** zkopírujte `web/i18n/en.json` a `server/i18n/en.json` na `<kód>.json`, přeložte hodnoty
+(klíče a parametry `{…}` neměňte), doplňte řádek do `web/i18n/languages.json` a případně pravidlo množného
+čísla do `server/i18n.py` (`PLURAL`). Test `tests/test_i18n.py` ověří, že všechny jazyky mají stejné klíče
+a parametry. Chybějící text se zobrazí anglicky.
+
 ## Vývoj
 - `server/` – Flask API (waitress za nginx), `web/` – frontend (vanilla JS, ES moduly, bez build kroku),
   `web/vendor/morse-pro/` – knihovna morse-pro, `deploy/` – nginx, systemd, certifikáty, Pinggy
-- testy: `.venv/bin/python -m unittest discover -s tests`
+- kód (identifikátory, komentáře, výpisy) je anglicky; texty pro uživatele jen přes slovníky (`t()`)
+- testy: `.venv/bin/python -m unittest discover -s tests`, kontrola JS: `python3 tests/jscheck.py web/js/*.js`
 
 ## Licence a poděkování
 Licence **EUPL-1.2** (viz [LICENSE](LICENSE)). Kdo upravenou verzi zpřístupní dalším lidem (i jen přes síť),
