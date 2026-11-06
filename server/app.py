@@ -11,7 +11,7 @@ from server.i18n import current as current_lang, t
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
-VERSION = "0.9.0"
+VERSION = "0.9.2"
 # Addresses of a particular installation are not in the code (E3): server/site.py ← /etc/morse-trainer/site.env
 HOME_URL, PUBLIC_URL, PUBLIC_HOSTS = site.HOME_URL, site.PUBLIC_URL, site.PUBLIC_HOSTS
 

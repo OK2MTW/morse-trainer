@@ -26,6 +26,7 @@ import {
 import { startAuth, renderAccount, backgroundSync, session } from './account.js';
 import { deviceKind, DEVICE_MOBILE } from './api.js';
 import { initCopy } from './copylesson.js';
+import { initDemo } from './demo.js';
 import * as WPM from '../vendor/morse-pro/morse-pro-wpm.js';
 
 const $ = (s) => document.querySelector(s);
@@ -47,7 +48,7 @@ player.settings = settings; // shared object (wpm, fwpm, freq, volume)
 
 // ================= navigation =================
 let view = 'home';
-const PUBLIC_VIEWS = ['login', 'register', 'reset'];
+const PUBLIC_VIEWS = ['login', 'register', 'reset', 'demo'];
 const TRAINING_VIEWS = ['home', 'intro', 'discrim', 'lesson', 'result', 'stats', 'quiz', 'copy', 'copyresult'];
 // 0.8.6: user menu (icon top right)
 function closeUserMenu() {
@@ -69,14 +70,18 @@ function show(name) {
   if (session.user?.pw_change) name = 'pwchange'; // E3: new password first
   const admin = session.user?.role === 'admin'; // the administrator only manages, does not train
   if (admin && TRAINING_VIEWS.includes(name)) name = 'account';
-  $('.tabs [data-go="home"]').hidden = admin;
-  for (const el of document.querySelectorAll('.training-only')) el.hidden = admin;
+  const out = !session.user; // 0.9.2: logged out = tabs Log in / Try it (demo)
+  $('.tabs [data-go="home"]').hidden = admin || out;
+  for (const el of document.querySelectorAll('.training-only')) el.hidden = admin || out;
+  for (const el of document.querySelectorAll('.public-only')) el.hidden = !out;
+  $('.usermenu').hidden = out;
+  if (view === 'demo' && name !== 'demo') demo.stop();
   view = name;
   for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== `view-${name}`;
   const training = name === 'lesson' || name === 'intro' || name === 'discrim' || name === 'copy';
-  $('#keyboard').hidden = name !== 'lesson' && name !== 'discrim' && name !== 'copy';
+  $('#keyboard').hidden = name !== 'lesson' && name !== 'discrim' && name !== 'copy' && name !== 'demo';
   player.keepAlive(training && document.visibilityState === 'visible'); // 0.8.5: BT output must not fall asleep
-  $('.tabs').hidden = training || !session.user || name === 'pwchange';
+  $('.tabs').hidden = training || name === 'pwchange' || (!session.user && !['login', 'demo'].includes(name));
   $('#user-btn').hidden = name === 'pwchange';
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.go === name);
   $('#user-btn').classList.toggle('active', name === 'settings' || name === 'account');
@@ -86,6 +91,7 @@ function show(name) {
   if (name === 'account') renderAccount();
   if (name === 'stats') { drawStats(); backgroundSync(); }
   if (name === 'quiz') openQuiz();
+  if (name === 'demo') demo.render();
   window.scrollTo(0, 0);
 }
 document.addEventListener('click', (e) => {
@@ -115,10 +121,16 @@ const kbd = new TouchKeyboard($('#keyboard'), (ch, ts) => (view === 'copy' ? cop
 });
 let repeatHandler = null;
 let pauseHandler = null;
+const demo = initDemo({
+  player, kbd, ensureAudio,
+  setHandlers: ({ input = null, repeat = null, pause = null }) => {
+    inputHandler = input; repeatHandler = repeat; pauseHandler = pause;
+  },
+});
 
 document.addEventListener('keydown', (e) => {
   if (view === 'copy') { if (copyCtl.onKey(e)) e.preventDefault(); return; }
-  if (view !== 'lesson' && view !== 'intro' && view !== 'discrim') return;
+  if (view !== 'lesson' && view !== 'intro' && view !== 'discrim' && view !== 'demo') return;
   if (e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
   if (e.key === ' ') { e.preventDefault(); repeatHandler?.(); return; }
   if (view === 'intro') { if (e.key === 'Enter') { e.preventDefault(); intro.next?.(); } return; }
@@ -943,6 +955,7 @@ onDataChange(() => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && ['home', 'settings', 'account', 'result', 'stats', 'copyresult'].includes(view)) backgroundSync();
   if (document.visibilityState === 'hidden' && view === 'copy') copyCtl.hold(); // the stream must not run into the void
+  if (document.visibilityState === 'hidden' && view === 'demo') demo.stop();
   player.keepAlive(document.visibilityState === 'visible' && ['lesson', 'intro', 'discrim', 'copy'].includes(view));
 });
 window.addEventListener('online', () => backgroundSync());

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Service worker: the app installs and static files work even when the network is down.
 // Strategy "network first, cache on failure" – during development you always get the new version.
-const CACHE = 'morse-v0.9.0';
+const CACHE = 'morse-v0.9.2';
 const ASSETS = [
   '/', '/index.html', '/css/app.css', '/js/main.js', '/js/audio.js', '/js/keyboard.js', '/js/charset.js', '/js/drill.js', '/js/coach.js', '/js/storage.js',
   '/js/api.js', '/js/account.js', '/js/stats.js', '/js/quiz.js', '/js/plan.js', '/js/dashboard.js',
-  '/js/copy.js', '/js/content.js', '/js/words.js', '/js/abbr.js', '/js/site.js', '/site-config.js', '/js/pwrules.js', '/js/trace.js', '/js/copylesson.js', '/js/i18n.js', '/o-aplikaci.html',
+  '/js/copy.js', '/js/content.js', '/js/words.js', '/js/abbr.js', '/js/site.js', '/site-config.js', '/js/pwrules.js', '/js/trace.js', '/js/copylesson.js', '/js/demo.js', '/js/i18n.js', '/o-aplikaci.html',
   '/i18n/languages.json', '/i18n/cs.json', '/i18n/en.json',
   '/vendor/morse-pro/morse-pro.js', '/vendor/morse-pro/morse-pro-message.js',
   '/vendor/morse-pro/morse-pro-cw.js', '/vendor/morse-pro/morse-pro-wpm.js',
