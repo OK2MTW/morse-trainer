@@ -4,7 +4,7 @@
 // The cache name carries a hash of all ASSETS (tests/swhash.py --write): any change of a file changes sw.js, the browser
 // installs the new set (bypassing the HTTP cache) and the page reloads outside a lesson (main.js, controllerchange).
 // tests/test_sw.py fails when the hash or the ASSETS list is out of date.
-const VERSION = '0.10.16';
+const VERSION = '0.10.17';
 const ASSETS_HASH = 'bd05a997';
 const CACHE = `morse-v${VERSION}-${ASSETS_HASH}`;
 const ASSETS = [

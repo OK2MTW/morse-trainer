@@ -11,6 +11,10 @@ ExecStart=@DIR@/.venv/bin/python -m server.wsgi
 Restart=on-failure
 RestartSec=3
 MemoryMax=120M
+# 2026-11-07 (capacity analysis, validation #26): every argon2 hash allocates 19 MiB; with the dynamic mmap threshold
+# glibc kept them in the per-thread heaps (4 waitress threads → RSS 31 → 108 MB after a few logins, close to MemoryMax).
+# A fixed threshold makes large blocks always mmap'ed and returned at once (RSS stays ~35 MB, peak ~52 MB under load).
+Environment=MALLOC_MMAP_THRESHOLD_=131072
 
 # Hardening: the service may write only to data/
 NoNewPrivileges=true

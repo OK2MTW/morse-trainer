@@ -300,13 +300,25 @@ def sessions_of(lessons):
 
 
 def _detail(r):
+    """Parsed detail of a lesson row. Parsed once per row (cached in the row dict under "_det"): the coach asks for it
+    many times per request and json.loads was half of /api/coach (capacity analysis 2026-11-07)."""
     d = r.get("detail")
     if isinstance(d, dict):
         return d
+    c = r.get("_det")
+    if c is not None and c[0] is d:  # bound to this very detail string (a copied row with a new detail re-parses)
+        return c[1]
     try:
-        return json.loads(d) if d else {}
+        p = json.loads(d) if d else {}
     except ValueError:
-        return {}
+        p = {}
+    if not isinstance(p, dict):
+        p = {}
+    try:
+        r["_det"] = (d, p)
+    except TypeError:  # an immutable row (sqlite3.Row) – no cache
+        pass
+    return p
 
 
 def char_table(lessons):

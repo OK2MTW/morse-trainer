@@ -457,3 +457,20 @@ class TestSpeed(unittest.TestCase):
                 break
         self.assertEqual(cur, {"wpm": 20, "fwpm": 20})
         self.assertLessEqual(len(ls), 10)  # 5 steps × 2 sessions
+
+
+class TestDetailCache(unittest.TestCase):
+    """Capacity analysis 2026-11-07 (#27): the detail of a lesson row is parsed once per request."""
+
+    def test_parsed_once(self):
+        import json as _json
+        from unittest import mock
+        r = {"detail": _json.dumps({"entry": True, "perChar": []})}
+        with mock.patch.object(C.json, "loads", wraps=_json.loads) as m:
+            for _ in range(5):
+                self.assertTrue(C._detail(r)["entry"])
+        self.assertEqual(m.call_count, 1)
+        self.assertEqual(C._detail({"detail": "not json"}), {})
+        self.assertEqual(C._detail({"detail": "[1, 2]"}), {})
+        r2 = {**r, "detail": _json.dumps({"perChar": []})}  # a copied row with another detail is not served from the cache
+        self.assertNotIn("entry", C._detail(r2))

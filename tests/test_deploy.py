@@ -57,3 +57,12 @@ class TestPinggyDeploy(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TrainerUnitTest(unittest.TestCase):
+    """#26: the service keeps large (argon2) allocations out of the per-thread heaps."""
+
+    def test_mmap_threshold(self):
+        unit = (ROOT / 'deploy/morse-trainer.service').read_text(encoding='utf-8')
+        self.assertIn('Environment=MALLOC_MMAP_THRESHOLD_=131072', unit)
+        self.assertIn('MemoryMax=120M', unit)

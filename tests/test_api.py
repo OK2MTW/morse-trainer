@@ -68,7 +68,7 @@ class ApiTest(unittest.TestCase):
 
     def test_health_and_me(self):
         c = Client()
-        self.assertEqual(c.req("GET", "/api/health").get_json()["version"], "0.10.16")
+        self.assertEqual(c.req("GET", "/api/health").get_json()["version"], "0.10.17")
         r = c.req("GET", "/api/me")
         self.assertEqual(r.status_code, 403)  # 0.8.1: ne 401 (Basic auth Pinggy v Chromu)
         self.assertTrue(r.get_json()["auth"])
