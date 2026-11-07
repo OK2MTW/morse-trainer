@@ -2,6 +2,7 @@
 """SQLite: a connection per request, schema and migrations via PRAGMA user_version."""
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 from flask import g
@@ -124,11 +125,50 @@ MIGRATIONS = [
         data     TEXT NOT NULL             -- JSON: message, source, line, stack, version, view
     )
     """,
+    # 7 (0.9.3): what's new – the id of the last news entry the user has dismissed (contents live in web/js/news.js)
+    """
+    ALTER TABLE users ADD COLUMN news_seen INTEGER NOT NULL DEFAULT 0
+    """,
+    # 8 (0.9.5): test account – synthetic history and reset by the CLI are allowed only here (protects real accounts)
+    """
+    ALTER TABLE users ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0
+    """,
+    # 9 (0.10.0): vocabulary – abbreviations, Q codes and call sign prefixes (list = abbr / q / pfx), per item counts
+    # and the sessions (multiple choice, no time limit)
+    """
+    CREATE TABLE vocab (
+        user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        list     TEXT NOT NULL CHECK (list IN ('abbr', 'q', 'pfx')),
+        code     TEXT NOT NULL,
+        n        INTEGER NOT NULL DEFAULT 0,
+        wrong    INTEGER NOT NULL DEFAULT 0,
+        last_ok  INTEGER,               -- the last answer was right (1) / wrong (0)
+        last_at  TEXT,
+        PRIMARY KEY (user_id, list, code)
+    );
+    CREATE TABLE vocab_sessions (
+        id        INTEGER PRIMARY KEY,
+        user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        client_id TEXT NOT NULL,
+        at        TEXT NOT NULL,
+        lists     TEXT NOT NULL,         -- e.g. "abbr,q"
+        dur_s     INTEGER,
+        n         INTEGER NOT NULL,
+        wrong     INTEGER NOT NULL,
+        detail    TEXT,                  -- JSON {list: [n, wrong]}
+        UNIQUE (user_id, client_id)
+    );
+    CREATE INDEX vocab_sessions_user_at ON vocab_sessions (user_id, at)
+    """,
 ]
 
 
 def connect(path=None):
     path = Path(path or DB_PATH)
+    # 2026-11-07: a partial test run once wrote test accounts into the live database (a test module imported the app
+    # before another one set MORSE_DB). Tests must never touch the real database, whatever the order of imports.
+    if "unittest" in sys.modules and path.resolve() == (ROOT / "data" / "morse.db").resolve():
+        raise RuntimeError("tests must set MORSE_DB to a temporary database – refusing the live data/morse.db")
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path, timeout=10, isolation_level=None)  # autocommit, transactions by hand
     con.row_factory = sqlite3.Row

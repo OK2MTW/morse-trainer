@@ -127,7 +127,7 @@ class TestCalibration(unittest.TestCase):
         self.assertEqual(e["source"], "prior")
         self.assertFalse(e["calibrated"])
         self.assertEqual(e["minPerChar"], list(C.ARCHETYPES["Z08"][1]))
-        self.assertEqual(e["remainingChars"], 49)
+        self.assertEqual(e["remainingChars"], 42)  # 0.9.6: main programme of 44
         self.assertEqual(e["dayMin"], 30)
 
     def test_data_wins(self):
@@ -211,15 +211,37 @@ class TestULevel(unittest.TestCase):
         self.assertEqual(C.computed_ulevel(one, 51), 1)
         two = [L(0, level=51, per=GOOD), L(20, level=51, per=GOOD)]
         self.assertEqual(C.computed_ulevel(two, 51), 2)
-        # not without the full set
-        self.assertEqual(C.computed_ulevel([L(0, level=50, per=GOOD), L(20, level=50, per=GOOD)], 50), 1)
+        # not without the full main programme
+        self.assertEqual(C.computed_ulevel([L(0, level=43, per=GOOD), L(20, level=43, per=GOOD)], 43), 1)
+        # 0.9.6: the main programme (44) is enough – the optional extension never blocks a level
+        core = [x for x in GOOD if x["ch"] in C.KOCH[:C.CORE_SIZE]]
+        self.assertEqual(C.computed_ulevel([L(0, level=44, per=core), L(20, level=44, per=core)], 44), 2)
+        weak_extra = [dict(x, acc=0.5) if x["ch"] in C.KOCH[C.CORE_SIZE:] else x for x in GOOD]
+        self.assertEqual(C.computed_ulevel([L(0, level=51, per=weak_extra), L(20, level=51, per=weak_extra)], 51), 2)
 
     def test_u2_weak_char(self):
         weak = [dict(x) for x in GOOD]
         weak[3]["acc"] = 0.7
         ls = [L(0, level=51, per=GOOD), L(20, level=51, per=weak), L(40, level=51, per=weak)]
         self.assertEqual(C.computed_ulevel(ls, 51), 1)
-        self.assertEqual(C.u1_status(ls, 51)["good"], 50)
+        self.assertEqual(C.u1_status(ls, 51)["good"], 43)
+        self.assertEqual(C.u1_status(ls, 51)["of"], 44)
+
+    def test_extension_order(self):
+        """0.9.6: the same Koch order on the server (coach, api) and in web/js/charset.js; the extension at the end."""
+        import re
+        from pathlib import Path
+        from server.api import KOCH_ORDER
+        js = Path(__file__).resolve().parent.parent.joinpath("web/js/charset.js").read_text(encoding="utf-8")
+        body = re.search(r"KOCH_ORDER = \[(.*?)\];", js, re.S).group(1)
+        body = re.sub(r"//.*", "", body)  # drop comments
+        order = "".join(a or b for a, b in re.findall(r"'([^']*)'|\"([^\"]*)\"", body))
+        self.assertEqual(order, C.KOCH)
+        self.assertEqual("".join(KOCH_ORDER), C.KOCH)
+        self.assertEqual(int(re.search(r"CORE_SIZE = (\d+)", js).group(1)), C.CORE_SIZE)
+        self.assertEqual(set(C.KOCH[C.CORE_SIZE:]), set(",':)\"@!"))
+        for prosign in "=+(&":  # BT AR KN AS stay in the main programme
+            self.assertLess(C.KOCH.index(prosign), C.CORE_SIZE)
 
     def test_u3(self):
         ls = [L(0, level=51, per=GOOD), L(20, level=51, per=GOOD, fwpm=20, ttr=550),
@@ -235,7 +257,7 @@ class TestULevel(unittest.TestCase):
 
     def test_stored_never_drops(self):
         self.assertEqual(C.level_info([L(0, level=5)], 5, 2)["ulevel"], 2)
-        self.assertLessEqual(C.MAX_COMPUTED_ULEVEL, 5)
+        self.assertLessEqual(C.MAX_COMPUTED_ULEVEL, 6)  # 0.10.14: U6 from head copy
 
 
 class TestPlateau(unittest.TestCase):

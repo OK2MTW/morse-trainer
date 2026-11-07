@@ -3,6 +3,8 @@
 import json
 import re
 import secrets
+import threading
+import time
 from datetime import timedelta
 
 from flask import Blueprint, Response, g, jsonify, request
@@ -10,14 +12,14 @@ from flask import Blueprint, Response, g, jsonify, request
 from server import auth, i18n
 from server.auth import ROLE_ADMIN, ROLE_COACH, ROLE_STUDENT, iso, login_required, now, sha256
 from server import coach
-from server.coach import MODE_CHAR, MODE_COPY
+from server.coach import MODE_CHAR, MODE_COPY, MODE_HEAD
 from server.db import get_db
 from server.i18n import t
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
 # the same order as web/js/charset.js
-KOCH_ORDER = list("KMURESNAPTLWI.JZ=FOY,VG5/Q92H38B?47C1D60X'-:()\"@+&!")
+KOCH_ORDER = list("KMURESNAPTLWI.JZ=FOYVG5/Q92H38B?47C1D60X-(+&,':)\"@!")  # as web/js/charset.js
 assert len(KOCH_ORDER) == 51 and len(set(KOCH_ORDER)) == 51
 CHARSET = set(KOCH_ORDER)
 
@@ -29,7 +31,8 @@ MAX_LESSONS_RETURNED = 500
 
 # Settings synchronized between devices (volume stays separate on each device).
 SETTINGS_RULES = {"wpm": (12, 40), "fwpm": (3, 40), "freq": (350, 900), "lessonMin": (1, 10),
-                  "autoSpeed": (0, 1)}  # M6: the coach controls the pace (1 = yes)
+                  "autoSpeed": (0, 1),   # M6: the coach controls the pace (1 = yes)
+                  "extraChars": (0, 1)}  # 0.9.6: learn also the optional extension (rare punctuation)
 
 
 def err(msg, code=400):
@@ -51,7 +54,8 @@ def device_of(value):
 def user_json(row_or_dict):
     u = dict(row_or_dict)
     return {"id": u["id"], "nick": u["nick"], "role": u["role"], "age_group": u.get("age_group"),
-            "pw_change": bool(u.get("pw_change", 0)), "debug": bool(u.get("debug_log", 0))}
+            "pw_change": bool(u.get("pw_change", 0)), "debug": bool(u.get("debug_log", 0)),
+            "news_seen": u.get("news_seen", 0), "created_at": u.get("created_at")}
 
 
 # ================= login =================
@@ -67,7 +71,7 @@ def login():
     d = body()
     nick = str(d.get("nick", "")).strip()[:40]
     pw = str(d.get("password", ""))[:auth.LOGIN_PW_MAX + 1]
-    ip = request.remote_addr or "?"
+    ip = auth.client_net()
     keys = (f"ip:{ip}", f"nick:{nick.lower()}")
     if auth.too_many(*keys):
         return err(t("err.tooManyLogins"), 429)
@@ -87,6 +91,46 @@ def login():
     csrf = auth.create_session(resp, row["id"], device_of(d.get("device")))
     resp.set_data(json.dumps({"user": user_json(row), "csrf": csrf}))
     return resp
+
+
+NEWS_ID_MAX = 100000
+
+
+@bp.post("/news/seen")
+@login_required()
+def news_seen():
+    """0.9.3: the user dismissed the what's-new overview up to this entry (never goes back – several devices)."""
+    nid = body().get("id")
+    if not isinstance(nid, int) or isinstance(nid, bool) or not 0 <= nid <= NEWS_ID_MAX:
+        return err(t("err.badNews"), 400)
+    db = get_db()
+    db.execute("UPDATE users SET news_seen = MAX(news_seen, ?) WHERE id = ?", (nid, g.user["id"]))
+    seen = db.execute("SELECT news_seen FROM users WHERE id = ?", (g.user["id"],)).fetchone()[0]
+    return jsonify(news_seen=seen)
+
+
+# Online users: who asked within the window (in memory only – one waitress process, nothing stored, lost on restart).
+# The app polls /online every ONLINE_POLL_S while visible, so a closed tab drops out after ONLINE_WINDOW_S.
+ONLINE_WINDOW_S = 180
+_online = {}
+_online_lock = threading.Lock()
+
+
+def online_count(uid, at=None):
+    """Mark uid as online now and return the number of distinct users seen within the window."""
+    at = time.monotonic() if at is None else at
+    with _online_lock:
+        _online[uid] = at
+        for k in [k for k, v in _online.items() if at - v > ONLINE_WINDOW_S]:
+            del _online[k]
+        return len(_online)
+
+
+@bp.get("/online")
+@login_required()
+def online():
+    """0.9.6: number of users active right now (the badge on the user icon) – only a count, no names."""
+    return jsonify(online=online_count(g.user["id"]))
 
 
 @bp.post("/logout")
@@ -140,7 +184,7 @@ def find_invite(token):
 
 @bp.post("/invite/check")
 def invite_check():
-    ip = request.remote_addr or "?"
+    ip = auth.client_net()
     if auth.too_many(f"inv:{ip}"):
         return err(t("err.tooManyAttempts"), 429)
     inv = find_invite(body().get("token"))
@@ -177,7 +221,7 @@ def create_user(db, nick, pw, role, age_group=None, consent=False, invited_by=No
 @bp.post("/register")
 def register():
     d = body()
-    ip = request.remote_addr or "?"
+    ip = auth.client_net()
     if auth.too_many(f"inv:{ip}"):
         return err(t("err.tooManyAttempts"), 429)
     db = get_db()
@@ -242,7 +286,7 @@ def create_reset_link(db, user_row, created_by):
 @bp.post("/password/reset")
 def password_reset():
     d = body()
-    ip = request.remote_addr or "?"
+    ip = auth.client_net()
     if auth.too_many(f"inv:{ip}"):
         return err(t("err.tooManyAttempts"), 429)
     db = get_db()
@@ -395,6 +439,8 @@ def reset_training(db, uid):
     db.execute("DELETE FROM lessons WHERE user_id = ?", (uid,))
     db.execute("DELETE FROM traces WHERE user_id = ?", (uid,))
     db.execute("DELETE FROM progress WHERE user_id = ?", (uid,))
+    db.execute("DELETE FROM vocab WHERE user_id = ?", (uid,))  # 0.10.0: vocabulary is part of the training
+    db.execute("DELETE FROM vocab_sessions WHERE user_id = ?", (uid,))
     db.execute("UPDATE users SET train_epoch = train_epoch + 1 WHERE id = ?", (uid,))
     # the questionnaire (preferences) stays like settings, the reached level goes back to U1
     db.execute("UPDATE coach SET ulevel = 1, ulevel_at = NULL WHERE user_id = ?", (uid,))
@@ -494,7 +540,8 @@ def num(v, lo, hi, kind=float):
 
 FATIGUE_KINDS = {"ttr", "acc"}
 FATIGUE_ACTIONS = {"pause", "end", "continue"}
-ADV_REASONS = {"ok", "few", "acc", "ttrUnstable", "newFew", "newAcc", "newSlow", "confirm", "full"}
+# 0.9.7 (Z-06): "aborted" = the page was closed/reloaded during the lesson → saved without advancing
+ADV_REASONS = {"ok", "few", "acc", "ttrUnstable", "newFew", "newAcc", "newSlow", "confirm", "full", "aborted"}
 
 
 def clean_detail(det):
@@ -511,6 +558,10 @@ def clean_detail(det):
         if isinstance(c, dict) and isinstance(c.get("pair"), str) and len(c["pair"]) <= 5:
             conf.append({"pair": c["pair"], "n": num(c.get("n"), 0, 10000, int) or 0})
     out = {"perChar": per, "confusions": conf}
+    if det.get("aborted") is True:  # 0.9.7 (Z-06)
+        out["aborted"] = True
+    if det.get("entry") is True:  # Z-14 (0.10.16): entry test of returning operators – analyses of thresholds skip it
+        out["entry"] = True
     # M4: difficulty control, warm-up, reason of the decision to advance
     if num(det.get("diff"), 0, 5) is not None:
         out["diff"] = num(det.get("diff"), 0, 5)
@@ -561,8 +612,9 @@ def clean_detail(det):
     return out
 
 
-LESSON_MODES = (MODE_CHAR, MODE_COPY)   # a later milestone may add e.g. head copy
-COPY_CONTENTS = ("groups", "pseudo", "words", "abbr", "calls", "long", "mix")  # M8 (U4); U5: qso …
+LESSON_MODES = (MODE_CHAR, MODE_COPY, MODE_HEAD)   # 0.10.14: head copy (U6)
+HEAD_FIELDS = ("from", "to", "RST", "NAME", "QTH", "RIG", "PWR", "ANT", "WX", "TEMP")  # = web/js/head.js
+COPY_CONTENTS = ("groups", "pseudo", "words", "abbr", "calls", "long", "mix", "qso")  # M8 (U4); M9 (U5): qso
 COPY_FATIGUE_KINDS = {"acc", "miss"}  # M8: fatigue in copy behind – accuracy drop / losing the stream
 
 
@@ -573,12 +625,16 @@ def clean_copy_detail(det):
     c = det["copy"]
     out = {"step": num(c.get("step"), 1, 50, int), "content": c.get("content") if c.get("content") in COPY_CONTENTS else None,
            "gapX": num(c.get("gapX"), 0.5, 10)}
+    if c.get("band") in coach.COPY_BANDS:  # M9 (U5): band situation of the step
+        out["band"] = c["band"]
     # M8 (optional – M7 lessons do not have them): step speed, timing of marks, lag in words
     for k, lo, hi, typ in (("wpm", 5, 60, int), ("markLag", 1, 5, int), ("lagW", 0, 100, float), ("lagWP90", 0, 100, int)):
         if c.get(k) is not None:
             out[k] = num(c.get(k), lo, hi, typ)
     for k in ("ok", "sub", "del", "ins", "n", "rounds", "lagChP90", "lagChMax"):
         out[k] = num(c.get(k), 0, 100000, int)
+    if c.get("mask") is not None:  # M9 part 2: characters masked by the band (not counted in ok/n)
+        out["mask"] = num(c.get("mask"), 0, 100000, int)
     out["acc"] = num(c.get("acc"), 0, 1)
     out["lagMs"] = num(c.get("lagMs"), -60000, 60000, int)
     out["lagP90"] = num(c.get("lagP90"), -60000, 60000, int)
@@ -592,6 +648,8 @@ def clean_copy_detail(det):
             conf.append({"pair": x["pair"], "n": num(x.get("n"), 0, 10000, int) or 0})
     out["confusions"] = conf
     res = {"copy": out}
+    if det.get("aborted") is True:  # 0.9.7 (Z-06): page closed/reloaded, only the finished lines
+        res["aborted"] = True
     ps = []
     for e in (det.get("pauses") or [])[:50] if isinstance(det.get("pauses"), list) else []:
         if isinstance(e, list) and len(e) == 2 and num(e[0], 0, 100000, int) is not None \
@@ -610,6 +668,25 @@ def clean_copy_detail(det):
                            "action": e.get("action") if e.get("action") in FATIGUE_ACTIONS else None})
         res["fatigue"] = {"base": {"acc": num(b.get("acc"), 0, 1), "miss": num(b.get("miss"), 0, 1),
                                    "n": num(b.get("n"), 0, 100000, int)}, "events": ev}
+    return res
+
+
+def clean_head_detail(det):
+    """Detail of a head-copy lesson (U6): step, speed, band, questions per field – only numbers and known values."""
+    if not isinstance(det, dict) or not isinstance(det.get("head"), dict):
+        return None
+    h = det["head"]
+    out = {"step": num(h.get("step"), 1, len(coach.HEAD_STEPS), int), "wpm": num(h.get("wpm"), 5, 60, int),
+           "q": num(h.get("q"), 0, 100000, int), "ok": num(h.get("ok"), 0, 100000, int),
+           "rounds": num(h.get("rounds"), 0, 10000, int)}
+    if h.get("band") in coach.COPY_BANDS:
+        out["band"] = h["band"]
+    f = h.get("fields") if isinstance(h.get("fields"), dict) else {}
+    out["fields"] = {k: [num(v[0], 0, 100000, int) or 0, num(v[1], 0, 100000, int) or 0]
+                     for k, v in f.items() if k in HEAD_FIELDS and isinstance(v, list) and len(v) == 2}
+    res = {"head": out}
+    if det.get("aborted") is True:
+        res["aborted"] = True
     return res
 
 
@@ -640,7 +717,8 @@ def lessons_post():
             mode = x.get("mode", MODE_CHAR)
             if mode not in LESSON_MODES:
                 continue
-            detail = clean_detail(x.get("detail")) if mode == MODE_CHAR else clean_copy_detail(x.get("detail"))
+            detail = (clean_detail if mode == MODE_CHAR else clean_copy_detail if mode == MODE_COPY
+                      else clean_head_detail)(x.get("detail"))
             db.execute(
                 "INSERT INTO lessons (user_id, client_id, at, device, mode, level, dur_s, trials, correct, acc, ttr, "
                 "wpm, fwpm, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id, client_id) DO NOTHING",
@@ -701,8 +779,8 @@ def trace_post():
 @bp.post("/client-errors")
 @login_required()
 def client_errors_post():
-    if not debug_enabled():
-        return jsonify(ok=False, debug=False)
+    # 0.9.4 (validation Z-05): application errors are collected from all accounts (technical data only, 180 days);
+    # the training trace itself stays limited to accounts with tracing enabled
     items = body().get("errors")
     if not isinstance(items, list):
         return err(t("err.errorList"))
@@ -716,7 +794,7 @@ def client_errors_post():
         db.execute("INSERT INTO client_errors (user_id, at, received, data) VALUES (?,?,?,?)",
                    (g.user["id"], at, ts, json.dumps(clean, ensure_ascii=False)))
     purge_debug(db)
-    return jsonify(ok=True)
+    return jsonify(ok=True, debug=debug_enabled())
 
 
 # ================= character statistics (M3) =================
@@ -864,6 +942,7 @@ def coach_info(db, uid):
         sp["change"]["applied"] = False
     c["speed"] = sp
     c["copy"] = coach.copy_advice(lessons, c["ulevel"])  # M7: copy behind (U3)
+    c["head"] = coach.head_advice(lessons, c["ulevel"])  # 0.10.14: head copy (trial from U4, U5 → U6)
     c["dashboard"] = coach.dashboard(lessons, level, c["prefs"], now().timestamp() * 1000)
     return c
 
@@ -899,6 +978,87 @@ def training_reset_user(uid):
 
 
 # ================= GDPR: export and deletion =================
+# ================= vocabulary (0.10.0): abbreviations, Q codes, call sign prefixes =================
+VOCAB_LISTS = ("abbr", "q", "pfx")
+VOCAB_CODE = re.compile(r"^[A-Z0-9/?]{1,8}$")
+VOCAB_SESSIONS_RETURNED = 30
+
+
+def vocab_data(db, uid, sessions=VOCAB_SESSIONS_RETURNED):
+    """Per list: totals and items {code: [n, wrong, last_ok]}; the last sessions (newest first)."""
+    lists = {k: {"n": 0, "wrong": 0, "items": {}} for k in VOCAB_LISTS}
+    for r in db.execute("SELECT list, code, n, wrong, last_ok FROM vocab WHERE user_id = ?", (uid,)):
+        x = lists[r["list"]]
+        x["items"][r["code"]] = [r["n"], r["wrong"], r["last_ok"]]
+        x["n"] += r["n"]
+        x["wrong"] += r["wrong"]
+    ses = db.execute("SELECT client_id, at, lists, dur_s, n, wrong, detail FROM vocab_sessions WHERE user_id = ? "
+                     "ORDER BY at DESC LIMIT ?", (uid, sessions)).fetchall()
+    return {"lists": lists, "sessions": [{"id": s["client_id"], "at": s["at"], "lists": s["lists"].split(","),
+                                          "durS": s["dur_s"], "n": s["n"], "wrong": s["wrong"],
+                                          "detail": json.loads(s["detail"] or "{}")} for s in ses]}
+
+
+@bp.get("/vocab")
+@login_required(ROLE_COACH, ROLE_STUDENT)
+def vocab_get():
+    return jsonify(vocab_data(get_db(), g.user["id"]))
+
+
+@bp.post("/vocab")
+@login_required(ROLE_COACH, ROLE_STUDENT)
+def vocab_post():
+    """Finished vocabulary sessions {sessions: [{id, at, durS, items: [[list, code, n, wrong, last_ok], ...]}]}.
+    Sending again is harmless (client id). Returns the saved ids (also those already stored)."""
+    d = body()
+    sent = d.get("sessions")
+    if not isinstance(sent, list) or len(sent) > 50:
+        return err(t("err.vocabList"), 400)
+    db = get_db()
+    uid = g.user["id"]
+    if stale_epoch(db, uid, d.get("epoch")):
+        return err(stale(), 409)
+    saved = []
+    db.execute("BEGIN")
+    try:
+        for s in sent:
+            if not isinstance(s, dict) or not isinstance(s.get("id"), str) or not 8 <= len(s["id"]) <= 64:
+                continue
+            at = s.get("at") if isinstance(s.get("at"), str) and len(s.get("at")) <= 40 else iso(now())
+            items = []
+            for it in (s.get("items") or [])[:400] if isinstance(s.get("items"), list) else []:
+                if not (isinstance(it, list) and len(it) == 5 and it[0] in VOCAB_LISTS and isinstance(it[1], str)
+                        and VOCAB_CODE.match(it[1])):
+                    continue
+                n, wrong = num(it[2], 1, 1000, int), num(it[3], 0, 1000, int)
+                if n is None or wrong is None or wrong > n:
+                    continue
+                items.append((it[0], it[1], n, wrong, 1 if it[4] else 0))
+            if not items:
+                continue
+            per = {}
+            for lst, _, n, wrong, _ in items:
+                p = per.setdefault(lst, [0, 0])
+                p[0] += n
+                p[1] += wrong
+            cur = db.execute("INSERT OR IGNORE INTO vocab_sessions (user_id, client_id, at, lists, dur_s, n, wrong, detail) "
+                             "VALUES (?,?,?,?,?,?,?,?)",
+                             (uid, s["id"], at, ",".join(k for k in VOCAB_LISTS if k in per), num(s.get("durS"), 0, 86400, int),
+                              sum(p[0] for p in per.values()), sum(p[1] for p in per.values()), json.dumps(per)))
+            if cur.rowcount:  # counted only once per session
+                for lst, code, n, wrong, last_ok in items:
+                    db.execute("INSERT INTO vocab (user_id, list, code, n, wrong, last_ok, last_at) VALUES (?,?,?,?,?,?,?) "
+                               "ON CONFLICT(user_id, list, code) DO UPDATE SET n = n + excluded.n, "
+                               "wrong = wrong + excluded.wrong, last_ok = excluded.last_ok, last_at = excluded.last_at",
+                               (uid, lst, code, n, wrong, last_ok, at))
+            saved.append(s["id"])
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+    return jsonify(saved=saved)
+
+
 @bp.get("/export")
 @login_required()
 def export():
@@ -913,6 +1073,7 @@ def export():
         "sessions": [dict(s) for s in sessions],
         **load_user_data(db, g.user["id"], limit=1_000_000, detail=True),
         "coach": coach_row(db, g.user["id"]),
+        "vocab": vocab_data(db, g.user["id"], sessions=1_000_000),
     }
     traces = db.execute("SELECT lesson_id, kind, at, data FROM traces WHERE user_id = ? ORDER BY at",
                         (g.user["id"],)).fetchall()

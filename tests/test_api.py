@@ -68,12 +68,43 @@ class ApiTest(unittest.TestCase):
 
     def test_health_and_me(self):
         c = Client()
-        self.assertEqual(c.req("GET", "/api/health").get_json()["version"], "0.9.2")
+        self.assertEqual(c.req("GET", "/api/health").get_json()["version"], "0.10.16")
         r = c.req("GET", "/api/me")
         self.assertEqual(r.status_code, 403)  # 0.8.1: ne 401 (Basic auth Pinggy v Chromu)
         self.assertTrue(r.get_json()["auth"])
         me = self.admin.req("GET", "/api/me").get_json()
         self.assertEqual(me["user"]["role"], "admin")
+
+    def test_news_seen(self):
+        c = Client()
+        r = c.register(make_invite(), "Novinky")
+        u = r.get_json()["user"]
+        self.assertEqual(u["news_seen"], 0)
+        self.assertTrue(u["created_at"])
+        self.assertEqual(c.req("GET", "/api/me").get_json()["user"]["news_seen"], 0)
+        self.assertEqual(c.req("POST", "/api/news/seen", {"id": 3}).get_json()["news_seen"], 3)
+        # never goes back (another device with an older list)
+        self.assertEqual(c.req("POST", "/api/news/seen", {"id": 1}).get_json()["news_seen"], 3)
+        self.assertEqual(c.req("GET", "/api/me").get_json()["user"]["news_seen"], 3)
+        for bad in ("2", -1, True, None, 10 ** 9):
+            self.assertEqual(c.req("POST", "/api/news/seen", {"id": bad}).status_code, 400, bad)
+        self.assertEqual(Client().req("POST", "/api/news/seen", {"id": 1}).status_code, 403)
+
+    def test_online(self):
+        from server import api as api_mod
+        api_mod._online.clear()
+        self.assertEqual(Client().req("GET", "/api/online").status_code, 403)
+        c = Client()
+        c.register(make_invite(), "Pripojeny")
+        self.assertEqual(c.req("GET", "/api/online").get_json()["online"], 1)
+        self.assertEqual(self.admin.req("GET", "/api/online").get_json()["online"], 2)
+        self.assertEqual(c.req("GET", "/api/online").get_json()["online"], 2)  # the same user counts once
+        # a user silent longer than the window drops out
+        t0 = 1000.0
+        api_mod._online.clear()
+        api_mod.online_count(1, t0)
+        self.assertEqual(api_mod.online_count(2, t0 + api_mod.ONLINE_WINDOW_S), 2)
+        self.assertEqual(api_mod.online_count(2, t0 + api_mod.ONLINE_WINDOW_S + 1), 1)
 
     def test_cookie_flags(self):
         c = Client()
@@ -359,6 +390,61 @@ def json_dumps(x):
     return json.dumps(x)
 
 
+class VocabApiTest(unittest.TestCase):
+    """0.10.0: vocabulary sessions – per list and item, sent again harmlessly, reset deletes them, admin has none."""
+
+    def test_sessions_and_stats(self):
+        c = Client()
+        self.assertEqual(c.register(make_invite(), "Slovnik").status_code, 201)
+        ses = {"id": "vocab-session-0001", "at": "2026-11-07T08:00:00Z", "durS": 300,
+               "items": [["q", "QRL", 3, 1, True], ["abbr", "TNX", 2, 0, True], ["pfx", "OK", 1, 1, False],
+                         ["evil", "X", 1, 0, True], ["q", "<b>", 1, 0, True], ["q", "QRM", 1, 2, True]]}
+        r = c.req("POST", "/api/vocab", {"sessions": [ses, ses]})
+        self.assertEqual(r.get_json()["saved"], ["vocab-session-0001", "vocab-session-0001"])
+        d = c.req("GET", "/api/vocab").get_json()
+        self.assertEqual(d["lists"]["q"]["items"], {"QRL": [3, 1, 1]})  # counted once; invalid items dropped
+        self.assertEqual((d["lists"]["q"]["n"], d["lists"]["q"]["wrong"]), (3, 1))
+        self.assertEqual(d["lists"]["pfx"]["items"]["OK"], [1, 1, 0])
+        self.assertEqual(len(d["sessions"]), 1)
+        self.assertEqual(d["sessions"][0]["lists"], ["abbr", "q", "pfx"])
+        self.assertEqual(d["sessions"][0]["detail"], {"q": [3, 1], "abbr": [2, 0], "pfx": [1, 1]})
+        # a second session adds up
+        ses2 = {"id": "vocab-session-0002", "items": [["q", "QRL", 2, 0, True]]}
+        c.req("POST", "/api/vocab", {"sessions": [ses2]})
+        self.assertEqual(c.req("GET", "/api/vocab").get_json()["lists"]["q"]["items"]["QRL"], [5, 1, 1])
+        self.assertEqual(c.req("POST", "/api/vocab", {"sessions": "x"}).status_code, 400)
+        self.assertIn("vocab", c.req("GET", "/api/export").get_json())
+        # reset of the training deletes the vocabulary too
+        c.req("POST", "/api/training/reset", {"password": "Tajne-heslo1"})
+        self.assertEqual(c.req("GET", "/api/vocab").get_json()["lists"]["q"]["items"], {})
+        adm = Client()
+        adm.register(make_invite("admin"), "SpravceSlovniku")
+        self.assertEqual(adm.req("GET", "/api/vocab").status_code, 403)
+
+
+class ClientNetTest(unittest.TestCase):
+    """0.9.7 (Z-03): attempts and blocks per IPv6 /64, IPv4 per address."""
+
+    def test_client_net(self):
+        from server.auth import client_net
+        self.assertEqual(client_net("203.0.113.7"), "203.0.113.7")
+        self.assertEqual(client_net("2001:db8:1:2:aaaa::1"), "2001:db8:1:2::/64")
+        self.assertEqual(client_net("2001:db8:1:2:bbbb:cccc:dddd:eeee"), "2001:db8:1:2::/64")
+        self.assertNotEqual(client_net("2001:db8:1:3::1"), client_net("2001:db8:1:2::1"))
+        self.assertEqual(client_net("::ffff:203.0.113.7"), "203.0.113.7")
+        self.assertEqual(client_net(""), "?")
+        self.assertEqual(client_net("nonsense"), "nonsense")
+
+    def test_ban_covers_the_block(self):
+        from server import auth
+        a, b = auth.client_net("2001:db8:9:9::1"), auth.client_net("2001:db8:9:9:ffff::2")
+        for _ in range(auth.FAIL_LIMITS["ip"]):
+            auth.note_fail(f"ip:{a}")
+        self.assertTrue(auth.too_many(f"ip:{b}"))  # another address in the same /64 is blocked too
+        auth._bans.pop(f"ip:{a}", None)
+        auth._fails.pop(f"ip:{a}", None)
+
+
 class DetailM4Test(unittest.TestCase):
     def test_clean_detail_m4(self):
         from server.api import clean_detail
@@ -372,6 +458,15 @@ class DetailM4Test(unittest.TestCase):
         self.assertNotIn("evil", d)
         self.assertNotIn("adv", clean_detail({"adv": "nesmysl"}))
         self.assertNotIn("warmup", clean_detail({"warmup": {"n": 0}}))
+
+    def test_aborted_lesson(self):
+        """0.9.7 (Z-06): a lesson saved when the page was closed – flag kept, no advancing reason."""
+        from server.api import clean_detail, clean_copy_detail
+        d = clean_detail({"adv": "aborted", "aborted": True})
+        self.assertEqual((d["adv"], d["aborted"]), ("aborted", True))
+        self.assertNotIn("aborted", clean_detail({"aborted": "yes"}))
+        self.assertTrue(clean_copy_detail({"copy": {"step": 1}, "aborted": True})["aborted"])
+        self.assertNotIn("aborted", clean_copy_detail({"copy": {"step": 1}}))
 
 
 class DetailM5Test(unittest.TestCase):
@@ -401,12 +496,13 @@ class CopyApiTest(unittest.TestCase):
         import contextlib
         import io
         with contextlib.redirect_stdout(io.StringIO()):
+            admin_main(["test-ucet", "Skluzak", "zap"])
             admin_main(["test-historie", "Skluzak", "--skluz-krok", "2"])
         co = c.req("GET", "/api/coach").get_json()
         self.assertEqual(co["ulevel"], 3)
         self.assertTrue(co["copy"]["available"])
         self.assertEqual(co["copy"]["step"], 2)
-        self.assertEqual(len(co["copy"]["chars"]), 51)
+        self.assertEqual(len(co["copy"]["chars"]), 44)  # 0.9.6: main programme
         det = {"copy": {"step": 2, "content": "groups", "gapX": 2, "ok": 70, "sub": 5, "del": 5, "ins": 2, "n": 80,
                         "acc": 0.85, "lagMs": 420, "lagP90": 1100, "lagCh": 0.5, "lagChP90": 1, "lagChMax": 3,
                         "drift": 0.5, "words": {"n": 24, "ok": 18}, "rounds": 4,
@@ -414,7 +510,7 @@ class CopyApiTest(unittest.TestCase):
                "evil": "x"}
         les = {"id": "copy-lesson-0001", "at": "2026-11-04T10:00:00Z", "mode": "skluz", "level": 51, "durS": 300,
                "trials": 80, "correct": 70, "acc": 0.85, "ttr": 500, "wpm": 20, "fwpm": 20, "detail": det}
-        bad = {**les, "id": "copy-lesson-0002", "mode": "hlava"}
+        bad = {**les, "id": "copy-lesson-0002", "mode": "vysilani"}  # unknown mode (hlava is valid since 0.10.14)
         r = c.req("POST", "/api/lessons", {"lessons": [les, bad]}).get_json()
         self.assertEqual(r["saved"], ["copy-lesson-0001"])
         data = c.req("GET", "/api/data").get_json()
@@ -431,7 +527,7 @@ class CopyApiTest(unittest.TestCase):
         # character statistics only from character lessons
         st = c.req("GET", "/api/stats").get_json()
         self.assertEqual(st["lessons"], 2)
-        # test-history refuses an account with its own lessons
+        # test-history refuses a test account with its own lessons (without --reset)
         with self.assertRaises(SystemExit):
             admin_main(["test-historie", "Skluzak"])
 
@@ -442,6 +538,7 @@ class CopyApiTest(unittest.TestCase):
         c = Client()
         self.assertEqual(c.register(make_invite(), "Uctyrka").status_code, 201)
         with contextlib.redirect_stdout(io.StringIO()):
+            admin_main(["test-account", "Uctyrka", "on"])
             admin_main(["test-historie", "Uctyrka", "--uroven", "4"])
         co = c.req("GET", "/api/coach").get_json()
         self.assertEqual(co["ulevel"], 4)
@@ -466,11 +563,121 @@ class CopyApiTest(unittest.TestCase):
         c2 = Client()
         self.assertEqual(c2.register(make_invite(), "Uctyrka2").status_code, 201)
         with contextlib.redirect_stdout(io.StringIO()):
+            admin_main(["test-account", "Uctyrka2", "on"])
             admin_main(["test-historie", "Uctyrka2", "--skluz-krok", "13"])
         co2 = c2.req("GET", "/api/coach").get_json()
         self.assertEqual((co2["ulevel"], co2["copy"]["step"], co2["copy"]["wpm"]), (4, 13, 25))
         with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()):
-            admin_main(["test-historie", "Uctyrka2", "--uroven", "5"])
+            admin_main(["test-historie", "Uctyrka2", "--uroven", "6"])
+
+
+class TestAccountTest(unittest.TestCase):
+    """0.9.5: a test account for testing new features ahead of real training (levels U2–U5, repeatable)."""
+
+
+    def test_u5_qso_band_step(self):
+        """M9: test-history on a U5 step → the coach offers the QSO step with its band situation."""
+        c = Client()
+        self.assertEqual(c.register(make_invite(), "Upetka").status_code, 201)
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            admin_main(["test-ucet", "Upetka", "zap"])
+            admin_main(["test-historie", "Upetka", "--skluz-krok", "16"])
+        co = c.req("GET", "/api/coach").get_json()
+        self.assertEqual(co["ulevel"], 5)
+        self.assertEqual((co["copy"]["step"], co["copy"]["content"], co["copy"]["band"]), (16, "qso", "u5qsb"))
+        # a lesson with the band is stored with it
+        les = {"id": "u5-band-1", "at": "2026-11-06T10:00:00Z", "mode": "skluz", "level": 44, "trials": 80, "correct": 75,
+               "acc": 0.94, "wpm": 25, "fwpm": 25,
+               "detail": {"copy": {"step": 16, "content": "qso", "gapX": 1, "band": "u5qsb", "n": 80, "ok": 75}}}
+        self.assertEqual(c.req("POST", "/api/lessons", {"lessons": [les]}).get_json()["saved"], ["u5-band-1"])
+        from server.api import clean_copy_detail
+        self.assertNotIn("band", clean_copy_detail({"copy": {"step": 16, "band": "evil"}})["copy"])
+        # M9 part 2: characters masked by the band – optional count, only a number
+        self.assertEqual(clean_copy_detail({"copy": {"step": 19, "mask": 7}})["copy"]["mask"], 7)
+        self.assertIsNone(clean_copy_detail({"copy": {"step": 19, "mask": "x"}})["copy"]["mask"])
+        self.assertNotIn("mask", clean_copy_detail({"copy": {"step": 14}})["copy"])
+        # 0.10.14: head copy – offered at U5 (step 1), a lesson in mode "hlava" is stored with a clean detail
+        self.assertEqual((co["head"]["available"], co["head"]["early"], co["head"]["step"]), (True, False, 1))
+        les = {"id": "u6-head-1", "at": "2026-11-06T11:00:00Z", "mode": "hlava", "level": 44, "trials": 15, "correct": 14,
+               "acc": 0.93, "wpm": 25, "fwpm": 25, "ttr": 900,
+               "detail": {"head": {"step": 1, "wpm": 25, "q": 15, "ok": 14, "rounds": 5,
+                                   "fields": {"from": [5, 5], "RST": [4, 3], "evil": [1, 1]}}, "secret": "x"}}
+        self.assertEqual(c.req("POST", "/api/lessons", {"lessons": [les]}).get_json()["saved"], ["u6-head-1"])
+        from server.api import clean_head_detail
+        d = clean_head_detail(les["detail"])
+        self.assertEqual(d, {"head": {"step": 1, "wpm": 25, "q": 15, "ok": 14, "rounds": 5,
+                                      "fields": {"from": [5, 5], "RST": [4, 3]}}})
+        self.assertIsNone(clean_head_detail({"copy": {}}))
+    def run_admin(self, *argv):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            admin_main(list(argv))
+        return out.getvalue()
+
+    def lesson(self, cid):
+        return {"id": cid, "at": "2026-11-06T10:00:00Z", "mode": "znak", "level": 2, "durS": 120, "trials": 40,
+                "correct": 38, "acc": 0.95, "ttr": 700, "wpm": 20, "fwpm": 15, "detail": {}}
+
+    def test_real_account_is_protected(self):
+        c = Client()
+        self.assertEqual(c.register(make_invite(), "Ostry").status_code, 201)
+        c.req("POST", "/api/lessons", {"lessons": [self.lesson("real-lesson-0001")]})
+        with self.assertRaises(SystemExit):  # not a test account
+            self.run_admin("test-history", "Ostry", "--level", "3")
+        with self.assertRaises(SystemExit):  # own training → cannot become a test account
+            self.run_admin("test-account", "Ostry", "on")
+        with self.assertRaises(SystemExit):  # --reset does not help without the mark
+            self.run_admin("test-history", "Ostry", "--reset")
+        st = c.req("GET", "/api/stats").get_json()
+        self.assertEqual(st["lessons"], 1)  # the training stayed
+        with self.assertRaises(SystemExit):  # the administrator never
+            self.run_admin("test-account", "OK2MTW-admin-does-not-exist", "on")
+
+    def test_levels_and_reset(self):
+        c = Client()
+        self.assertEqual(c.register(make_invite(), "Tester1").status_code, 201)
+        self.assertIn("Tester1", self.run_admin("test-account", "Tester1", "on"))
+        self.assertIn("TEST", self.run_admin("users"))
+        con = connect()
+        self.assertEqual(con.execute("SELECT debug_log FROM users WHERE nick = 'Tester1'").fetchone()[0], 1)
+        # U2: full set at 20/15 WPM, the coach speeds the gaps up (M6)
+        self.run_admin("test-history", "Tester1", "--level", "2")
+        co = c.req("GET", "/api/coach").get_json()
+        self.assertEqual(co["ulevel"], 2)
+        self.assertTrue(co["copy"]["available"] and co["copy"]["early"])  # Z-16: trial copy behind before U3
+        # the account trains → without --reset it refuses, with --reset it starts again
+        c.req("POST", "/api/lessons", {"lessons": [self.lesson("own-lesson-0001")]})
+        with self.assertRaises(SystemExit):
+            self.run_admin("test-history", "Tester1", "--level", "5")
+        self.assertIn("reset", self.run_admin("test-history", "Tester1", "--level", "5", "--reset"))
+        co = c.req("GET", "/api/coach").get_json()  # the stored level went back to U1 by the reset, U5 from the data
+        self.assertEqual(co["ulevel"], 5)
+        # M9: two sessions on step 13 meeting U5 → the ladder continues with QSOs (step 14)
+        self.assertEqual((co["copy"]["step"], co["copy"]["wpm"], co["copy"]["content"]), (14, 25, "qso"))
+        ids = [x["id"] for x in c.req("GET", "/api/data").get_json()["lessons"]]
+        self.assertNotIn("own-lesson-0001", ids)
+        self.assertTrue(all(i.startswith("test-") for i in ids))
+        # back down: the reset returns the stored level to U1, U3 from the data
+        self.run_admin("test-history", "Tester1", "--reset")
+        self.assertEqual(c.req("GET", "/api/coach").get_json()["ulevel"], 3)
+        # invalid combinations
+        for bad in (["--level", "5", "--copy-step", "3"], ["--level", "2", "--copy-step", "3"], ["--level", "6"]):
+            with self.assertRaises(SystemExit), contextlib_quiet():
+                self.run_admin("test-history", "Tester1", "--reset", *bad)
+        # off → test-history refuses again
+        self.run_admin("test-ucet", "Tester1", "vyp")
+        with self.assertRaises(SystemExit):
+            self.run_admin("test-history", "Tester1", "--reset")
+
+
+def contextlib_quiet():
+    import contextlib
+    import io
+    return contextlib.redirect_stdout(io.StringIO())
 
 
 class LanguageTest(unittest.TestCase):
@@ -702,6 +909,30 @@ class DebugTraceTest(unittest.TestCase):
             admin_main(["ladeni", "Ladeni", "vyp"])
         self.assertEqual(con.execute("SELECT COUNT(*) FROM client_errors WHERE user_id = ?", (uid,)).fetchone()[0], 0)
         con.close()
+
+    def test_client_errors_from_every_account(self):
+        """0.9.4 (Z-05): application errors are stored without tracing; the lesson trace still is not."""
+        c = Client()
+        self.assertEqual(c.register(make_invite(), "BezLadeni").status_code, 201)
+        r = c.req("POST", "/api/client-errors", {"errors": [{"msg": "TypeError: y", "view": "view-home"}]})
+        self.assertEqual(r.get_json(), {"ok": True, "debug": False})
+        tr = {"lesson_id": "abcdefgh-2", "kind": "znak", "at": "2026-11-05T10:00:00Z", "data": {"ev": []}}
+        self.assertEqual(c.req("POST", "/api/trace", tr).get_json()["debug"], False)
+        con = connect()
+        uid = con.execute("SELECT id FROM users WHERE nick = 'BezLadeni'").fetchone()[0]
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM client_errors WHERE user_id = ?", (uid,)).fetchone()[0], 1)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM traces WHERE user_id = ?", (uid,)).fetchone()[0], 0)
+        con.close()
+
+    def test_origin_rejection_is_logged(self):
+        """0.9.4 (#10): a rejected Origin is logged with Origin and Host, never with the body."""
+        c = Client()
+        with self.assertLogs(level="WARNING") as logs:
+            r = c.req("POST", "/api/invite/check", {"token": "SECRET-TOKEN-123456789"}, origin="https://evil.example")
+        self.assertEqual(r.status_code, 403)
+        out = "\n".join(logs.output)
+        self.assertIn("evil.example", out)
+        self.assertNotIn("SECRET-TOKEN", out)
 
 
 if __name__ == "__main__":

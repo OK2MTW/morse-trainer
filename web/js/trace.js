@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 // V1: debug trace of the training – only for accounts where the administrator enables it (server.admin debug NICK on).
 // During a lesson it collects events [ms from the start, type, data] and sends them with the sync after the lesson.
-// It also captures application (JS) errors. Nothing personal – only the course of training and the technical state of audio/app.
+// It also captures application (JS) errors – since 0.9.4 for every account. Nothing personal – only the course of training and the technical state of audio/app.
 import { api } from './api.js';
 
 const Q_MAX = 40;            // at most lessons in the queue (older ones are dropped)
@@ -69,12 +69,12 @@ export function audioMeta(player) {
 export async function flushTrace() {
   if (uid == null) return;
   const errs = read(ERR_KEY, []);
-  if (enabled && errs.length) {
+  if (errs.length) { // 0.9.4: application errors from every account (validation Z-05)
     const r = await api('POST', '/client-errors', { errors: errs });
     localStorage.removeItem(ERR_KEY);
-    if (r.debug === false) { setTraceUser(null); return; }
+    if (r.debug === false && enabled) { setTraceUser(null); return; }
   }
-  if (!enabled) { if (errs.length) localStorage.removeItem(ERR_KEY); return; }
+  if (!enabled) return;
   const key = qKey(uid);
   let q = read(key, []);
   while (q.length) {
@@ -94,15 +94,31 @@ export async function flushTrace() {
 document.addEventListener('visibilitychange', () => tr('vis', document.visibilityState));
 window.addEventListener('online', () => tr('net', 'online'));
 window.addEventListener('offline', () => tr('net', 'offline'));
-window.addEventListener('pagehide', () => { tr('pagehide'); if (cur) traceEnd(null, { aborted: 'pagehide' }); });
+// 0.9.7 (Z-06): the app saves a running lesson first (beforeHide) → the trace is linked to the saved lesson
+let beforeHide = null;
+export function setBeforeHide(fn) { beforeHide = fn; }
+window.addEventListener('pagehide', () => {
+  tr('pagehide');
+  try { beforeHide?.(); } catch (e) { /* never block leaving the page */ }
+  if (cur) traceEnd(null, { aborted: 'pagehide' });
+});
 
 // ---------- application errors ----------
+// #25: the app version goes with every error – read from the service worker cache name (morse-v<VERSION>-<hash>)
+let appVer = '';
+try {
+  globalThis.caches?.keys().then((ks) => {
+    const v = ks.map((k) => /^morse-v(.+)-[0-9a-f]+$/.exec(k)?.[1]).filter(Boolean);
+    if (v.length) appVer = v.at(-1);
+  }).catch(() => {});
+} catch (e) { /* no Cache API (http, private mode) */ }
+
 function noteError(msg, src, line, stack) {
   const errs = read(ERR_KEY, []);
   if (errs.length >= ERR_MAX) return;
   errs.push({
     at: new Date().toISOString(), msg: String(msg).slice(0, 300), src: String(src || '').slice(0, 300),
-    line: String(line || ''), stack: String(stack || '').slice(0, 2000), view: document.querySelector('.view:not([hidden])')?.id || '',
+    line: String(line || ''), stack: String(stack || '').slice(0, 2000), ver: appVer, view: document.querySelector('.view:not([hidden])')?.id || '',
     ua: navigator.userAgent.slice(0, 300),
   });
   write(ERR_KEY, errs);

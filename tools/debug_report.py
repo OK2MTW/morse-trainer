@@ -86,12 +86,12 @@ def report_char(row, data, show_events):
         print(f"   new character: {len(nf)} trials ({round(100 * len(nf) / n)} %), accuracy "
               f"{round(100 * sum(x['ok'] for x in nf) / len(nf)) if nf else '-'} %")
     other = {k: v for k, v in cnt.items() if k in ("pause", "resume", "vis", "audio", "net", "error", "fat", "fatChoice",
-                                                    "flu", "warmEnd", "rewarmEnd", "pagehide")}
+                                                    "pw", "flu", "warmEnd", "rewarmEnd", "pagehide")}
     if other or hidden_ms:
         print(f"   events: {', '.join(f'{k} {v}×' for k, v in other.items())}"
               f"{f', outside the app {round(hidden_ms / 1000)} s' if hidden_ms else ''}")
     for e in ev:
-        if e[1] in ("audio", "error", "fat", "fatChoice", "resume"):
+        if e[1] in ("audio", "error", "fat", "fatChoice", "resume", "pw", "pwEnd"):
             print(f"     {e[0] / 1000:7.1f} s  {e[1]} {json.dumps(e[2], ensure_ascii=False) if len(e) > 2 else ''}")
     if tone_bad:
         print(f"   ! suspicious tone end for {tone_bad} characters (outside 0–3000 ms)")

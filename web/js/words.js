@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Common English words for copy behind: short 2–5 letters (M7, steps 5–6), long 6–7 letters (M8).
 // The list was compiled by hand for this project (not taken from a third-party list). Letters A–Z only.
-// Amateur radio abbreviations and Q codes are separately in abbr.js (M8).
+// Amateur radio abbreviations and Q codes come from the vocabulary trainer (vocab.js, 0.10.9).
 export const WORDS = `
 AN AS AT BE BY DO GO HE IF IN IS IT ME MY NO OF ON OR SO TO UP US WE
 ACT ADD AGE AGO AIR ALL AND ANY ARE ARM ART ASK BAD BAG BED BIG BIT BOX BOY BUS BUT BUY CAN CAR CAT CUP CUT

@@ -41,16 +41,16 @@ export function confusionsWith(chars, target) {
 /**
  * Renders the Statistics card.
  * @param {HTMLElement} root
- * @param {{stats: object, level: number, onPlay: (ch: string) => void}} o
+ * @param {{stats: object, level: number, of: number, onPlay: (ch: string) => void}} o
  */
-export function renderStats(root, { stats, level, onPlay }) {
+export function renderStats(root, { stats, level, of = KOCH_ORDER.length, onPlay }) {
   root.textContent = '';
   const chars = stats.chars || {};
 
   const card = el('div', 'card');
   card.append(el('h2', null, t('stats.title')));
   card.append(el('p', 'hint', stats.lessons
-    ? t('stats.intro', { n: stats.lessons, level, of: KOCH_ORDER.length })
+    ? t('stats.intro', { n: stats.lessons, level, of })
     : t('stats.empty')));
   const grid = el('div', 'path');
   const detail = el('div', 'card');

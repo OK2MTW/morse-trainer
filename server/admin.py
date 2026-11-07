@@ -9,11 +9,14 @@
   .venv/bin/python -m server.admin debug [NICK on|off]  → debug trace of the training (no arguments = state)
   .venv/bin/python -m server.admin debug-delete NICK|--all     → deletes debug traces and app errors
   .venv/bin/python -m server.admin reset-training NICK|--all   → deletes lessons and progress, accounts stay
-  .venv/bin/python -m server.admin test-history NICK [--level 3|4] [--copy-step N]
-      → only for a test account without its own lessons: creates a history (full set, 20/20 WPM, 95 %) → level U3;
-        --level 4 adds 2 copy-behind sessions on step 6 meeting the U4 criterion → U4 and step 7;
-        --copy-step N also adds a copy-behind lesson on step N (1–13, from 7 on it means U4). A training reset deletes it.
-
+  .venv/bin/python -m server.admin test-account NICK on|off  → marks a test account (on also enables the debug trace);
+      only a new account (or one after reset-training) can be marked – real training stays protected
+  .venv/bin/python -m server.admin test-history NICK [--level 2|3|4|5] [--copy-step N] [--reset]
+      → only for a test account: a synthetic history (main programme of 44 characters, 95 %) so that new features can be tested ahead of
+        real training. --level 2 = main programme at 20/15 WPM (U2, the pace speeds up – M6); 3 (default) = 20/20 WPM → U3;
+        4 = also 2 copy-behind sessions on step 6 → U4 and step 7; 5 = also 2 sessions on step 13 (25 WPM) → U5.
+        --copy-step N also adds a copy-behind lesson on step N (1–23; from 7 on it means U4, from 14 on U5; not with level 2).
+        --reset first deletes the training of the test account (as reset-training), so it can be repeated.
 Czech command names still work as aliases (pozvanka, uzivatele, obnova, heslo, ladeni zap|vyp, ladeni-smazat
 --vsichni, reset-vycviku --vsichni, test-historie --uroven --skluz-krok).
 """
@@ -33,7 +36,7 @@ from server.db import connect, migrate
 # Czech aliases (older notes and instructions) → English commands and options
 ALIASES = {"pozvanka": "invite", "uzivatele": "users", "obnova": "reset-link", "heslo": "password",
            "ladeni": "debug", "ladeni-smazat": "debug-delete", "reset-vycviku": "reset-training",
-           "test-historie": "test-history"}
+           "test-historie": "test-history", "test-ucet": "test-account"}
 ARG_ALIASES = {"zap": "on", "vyp": "off", "--vsichni": "--all", "--uroven": "--level", "--skluz-krok": "--copy-step"}
 # Link hashes are stored in links already sent – the app accepts these and the English #invite= / #reset=
 INVITE_HASH, RESET_HASH = "pozvanka", "heslo"
@@ -65,11 +68,11 @@ def main(argv):
         print(f"Invitation ({role}, valid for 7 days, only once):")
         print_links(token, INVITE_HASH, role == ROLE_ADMIN)
     elif cmd == "users":
-        for r in con.execute("SELECT id, nick, role, age_group, created_at, last_login_at, disabled FROM users "
-                             "ORDER BY id"):
+        for r in con.execute("SELECT id, nick, role, age_group, created_at, last_login_at, disabled, is_test "
+                             "FROM users ORDER BY id"):
             print(f"{r['id']:>3}  {r['nick']:<24} {r['role']:<7} {r['age_group'] or '-':<6} "
                   f"created {r['created_at'][:10]}  last login {(r['last_login_at'] or '-')[:16]}"
-                  f"{'  BLOCKED' if r['disabled'] else ''}")
+                  f"{'  BLOCKED' if r['disabled'] else ''}{'  TEST' if r['is_test'] else ''}")
     elif cmd == "password" and len(argv) == 2:
         row = con.execute("SELECT id, nick FROM users WHERE nick = ?", (argv[1],)).fetchone()
         if not row:
@@ -127,34 +130,66 @@ def main(argv):
             reset_training(con, r["id"])
         con.execute("COMMIT")
         print(f"Training reset: {', '.join(r['nick'] for r in rows) or 'nobody'}.")
+    elif cmd == "test-account" and len(argv) == 3 and argv[2] in ("on", "off"):
+        row = con.execute("SELECT id FROM users WHERE nick = ? AND role != ?", (argv[1], ROLE_ADMIN)).fetchone()
+        if not row:
+            sys.exit("User not found (or is an administrator).")
+        if argv[2] == "on":
+            own = own_lessons(con, row["id"])
+            if own:
+                sys.exit(f"The user has {own} own lessons – only a new account can become a test account "
+                         "(a real training must not be overwritten; reset-training first if it really is a test account).")
+            con.execute("UPDATE users SET is_test = 1, debug_log = 1 WHERE id = ?", (row["id"],))
+            print(f"{argv[1]} is a test account (debug trace on). Next: test-history {argv[1]} --level N")
+        else:
+            con.execute("UPDATE users SET is_test = 0 WHERE id = ?", (row["id"],))
+            print(f"{argv[1]} is no longer a test account (the debug trace stays as it was: see debug).")
     elif cmd == "test-history" and len(argv) >= 2:
-        opts = dict(zip(argv[2::2], argv[3::2]))
-        if len(argv) % 2 or set(opts) - {"--level", "--copy-step"}:
+        reset = "--reset" in argv[2:]
+        rest = [a for a in argv[2:] if a != "--reset"]
+        opts = dict(zip(rest[0::2], rest[1::2]))
+        if len(rest) % 2 or set(opts) - {"--level", "--copy-step"}:
             print(__doc__)
             sys.exit(1)
         step = int(opts["--copy-step"]) if opts.get("--copy-step", "").isdigit() else None
         if "--copy-step" in opts and not (step and 1 <= step <= len(coach.COPY_STEPS)):
             sys.exit(f"The step must be 1–{len(coach.COPY_STEPS)}.")
         ul = opts.get("--level", "3")
-        if ul not in ("3", "4"):
-            sys.exit("The level must be 3 or 4.")
-        ul = 4 if step and coach.COPY_STEPS[step - 1]["ulevel"] >= 4 else int(ul)
-        row = con.execute("SELECT id FROM users WHERE nick = ? AND role != ?", (argv[1], ROLE_ADMIN)).fetchone()
+        if ul not in ("2", "3", "4", "5"):
+            sys.exit("The level must be 2, 3, 4 or 5.")
+        ul = int(ul)
+        if step and ul == 2:
+            sys.exit("--copy-step does not go with level 2 (U2 has no copy behind).")
+        if step and ul == 5 and coach.COPY_STEPS[step - 1]["ulevel"] < 5:
+            sys.exit("With level 5 the copy step must be a U5 step (14 and more).")
+        if step:  # the step decides the level (M9: steps 14+ = U5)
+            ul = max(ul, coach.COPY_STEPS[step - 1]["ulevel"])
+        row = con.execute("SELECT id, is_test FROM users WHERE nick = ? AND role != ?",
+                          (argv[1], ROLE_ADMIN)).fetchone()
         if not row:
             sys.exit("User not found (or is an administrator).")
-        own = con.execute("SELECT COUNT(*) FROM lessons WHERE user_id = ? AND client_id NOT LIKE 'test-%'",
-                          (row["id"],)).fetchone()[0]
-        if own:
-            sys.exit(f"The user has {own} own lessons – test-history is only for a test account "
-                     "(or run reset-training first).")
+        if not row["is_test"]:
+            sys.exit(f"{argv[1]} is not a test account – first: test-account {argv[1]} on")
+        own = own_lessons(con, row["id"])
+        if own and not reset:
+            sys.exit(f"The test account has {own} own lessons – add --reset (deletes its training first).")
         con.execute("BEGIN")
+        if reset:
+            reset_training(con, row["id"])
         test_history(con, row["id"], step, ul)
         con.execute("COMMIT")
-        print(f"Done: history for U{ul}" + (f" and a copy-behind lesson on step {step}" if step else "")
+        print(f"Done: {'training reset, ' if reset else ''}history for U{ul}"
+              + (f" and a copy-behind lesson on step {step}" if step else "")
               + ". Log out and in again in the app (or reload the page) so that the data load.")
     else:
         print(__doc__)
         sys.exit(1)
+
+
+def own_lessons(con, uid):
+    """Lessons the user trained (not created by test-history)."""
+    return con.execute("SELECT COUNT(*) FROM lessons WHERE user_id = ? AND client_id NOT LIKE 'test-%'",
+                       (uid,)).fetchone()[0]
 
 
 def copy_row(step, hours, t0, acc, words_ok):
@@ -169,33 +204,41 @@ def copy_row(step, hours, t0, acc, words_ok):
         det["copy"]["wpm"] = st["wpm"]
     w = st["wpm"] or 20
     return (f"test-skluz-{step}-{secrets.token_hex(4)}", iso(t0 - timedelta(hours=hours)), MODE_COPY, 80, ok, acc,
-            None, json.dumps(det), w)
+            None, json.dumps(det), w, w)
 
 
 def test_history(con, uid, step=None, ulevel=3):
-    """Synthetic history for testing copy behind: 2 character sessions at full pace → the coach computes U3 (M7).
-    ulevel 4 (M8): also 2 copy-behind sessions on step 6 (92 %, stable lag) → the U3 → U4 criterion."""
+    """Synthetic history for testing ahead of real training: 2 character sessions with the main programme (44).
+    ulevel 2 (M6): at 20/15 WPM → U2 (the coach speeds the gaps up); 3 (M7): at 20/20 WPM → U3;
+    4 (M8): also 2 copy-behind sessions on step 6 (92 %, stable lag) → the U3 → U4 criterion;
+    5 (0.9.5, for M9): also 2 sessions on the last step (25 WPM, 92 %, words 22/24) → the U4 → U5 criterion."""
     t0 = now()
-    per = [{"ch": c, "n": 10, "acc": 0.95, "ttr": 450} for c in KOCH_ORDER]
+    fw = 15 if ulevel == 2 else 20
+    core = KOCH_ORDER[:coach.CORE_SIZE]  # 0.9.6: the main programme (the extension is off by default)
+    per = [{"ch": c, "n": 10, "acc": 0.95, "ttr": 450} for c in core]
     rows = []
-    for k, hours in enumerate((26, 2)):
+    for k, hours in enumerate((60, 50) if ulevel >= 5 else (26, 2)):
         rows.append((f"test-znak-{k}-{secrets.token_hex(4)}", iso(t0 - timedelta(hours=hours)), MODE_CHAR, 510, 485,
-                     0.95, 450, json.dumps({"perChar": per, "confusions": []}), 20))
+                     0.95, 450, json.dumps({"perChar": per, "confusions": []}), 20, fw))
     if ulevel >= 4:
         last_u3 = coach.COPY_U3_LAST
-        rows += [copy_row(last_u3, 25, t0, 0.92, 21), copy_row(last_u3, 3, t0, 0.92, 21)]
-    if step:  # U3: 85 % (the step holds); U4: 92 % (together with step 6 it still meets the U4 criterion)
-        rows.append(copy_row(step, 1, t0, 0.92 if ulevel >= 4 else 0.85, 21 if ulevel >= 4 else 17))
-    for cid, at, mode, trials, correct, acc, ttr, det, wpm in rows:
+        h = (40, 30) if ulevel >= 5 else (25, 3)  # U5: all step-6 sessions before the step-13 ones
+        rows += [copy_row(last_u3, h[0], t0, 0.92, 21), copy_row(last_u3, h[1], t0, 0.92, 21)]
+    if ulevel >= 5:
+        last = coach.COPY_U4_LAST
+        rows += [copy_row(last, 26, t0, 0.92, 22), copy_row(last, 2, t0, 0.92, 22)]
+    if step:  # U3: 85 % (the step holds); U4+: 92 % (together with the earlier steps it still meets the criteria)
+        rows.append(copy_row(step, 1, t0, 0.92 if ulevel >= 4 else 0.85, 22 if ulevel >= 5 else 21 if ulevel >= 4 else 17))
+    for cid, at, mode, trials, correct, acc, ttr, det, wpm, fwpm in rows:
         con.execute("INSERT INTO lessons (user_id, client_id, at, device, mode, level, dur_s, trials, correct, acc, "
                     "ttr, wpm, fwpm, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (uid, cid, at, "pc", mode, len(KOCH_ORDER), 600, trials, correct, acc, ttr, wpm, wpm, det))
+                    (uid, cid, at, "pc", mode, len(core), 600, trials, correct, acc, ttr, wpm, fwpm, det))
     ts = iso(t0)
     con.execute("INSERT INTO progress (user_id, level, introduced, updated_at) VALUES (?,?,?,?) "
                 "ON CONFLICT(user_id) DO UPDATE SET level = excluded.level, introduced = excluded.introduced, "
-                "updated_at = excluded.updated_at", (uid, len(KOCH_ORDER), json.dumps(KOCH_ORDER), ts))
+                "updated_at = excluded.updated_at", (uid, len(core), json.dumps(core), ts))
     old = con.execute("SELECT data FROM settings WHERE user_id = ?", (uid,)).fetchone()
-    data = {**(json.loads(old["data"]) if old else {}), "wpm": 20, "fwpm": 20}
+    data = {**(json.loads(old["data"]) if old else {}), "wpm": 20, "fwpm": fw}
     con.execute("INSERT INTO settings (user_id, data, updated_at) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET "
                 "data = excluded.data, updated_at = excluded.updated_at", (uid, json.dumps(data), ts))
 

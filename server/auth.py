@@ -3,6 +3,7 @@
 import hashlib
 import os
 import secrets
+import ipaddress
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,7 @@ from functools import wraps
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from flask import abort, g, jsonify, request
+from flask import abort, current_app, g, jsonify, request
 
 from server.db import get_db
 from server.i18n import t
@@ -101,6 +102,21 @@ FAIL_LIMITS = {"nick": 8, "ip": 30, "inv": 20}
 BAN_SECONDS = 24 * 3600  # E3: an IP that exhausts the "ip" limit is blocked for 24 h
 
 
+def client_net(addr=None):
+    """0.9.7 (Z-03): key for limiting attempts – IPv4 as is, IPv6 as its /64 block (a mobile network gives the whole block
+    to one device, so changing the address inside it must not bypass the limit or the 24 h block)."""
+    addr = request.remote_addr if addr is None else addr
+    try:
+        ip = ipaddress.ip_address(addr or "")
+    except ValueError:
+        return addr or "?"
+    if ip.version == 6:
+        if ip.ipv4_mapped:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
 def too_many(*keys):
     t = time.monotonic()
     with _fails_lock:
@@ -177,7 +193,7 @@ def load_session():
         return
     db = get_db()
     row = db.execute(
-        "SELECT s.*, u.nick, u.role, u.disabled, u.age_group, u.pw_change, u.debug_log FROM sessions s JOIN users u ON u.id = s.user_id "
+        "SELECT s.*, u.nick, u.role, u.disabled, u.age_group, u.pw_change, u.debug_log, u.news_seen, u.created_at AS u_created FROM sessions s JOIN users u ON u.id = s.user_id "
         "WHERE s.id_hash = ?", (sha256(token),)).fetchone()
     t = now()
     if row is None or row["expires_at"] < iso(t) or row["disabled"]:
@@ -186,7 +202,8 @@ def load_session():
         return  # E3: administration only from the home network
     g.session = row
     g.user = {"id": row["user_id"], "nick": row["nick"], "role": row["role"], "age_group": row["age_group"],
-              "pw_change": bool(row["pw_change"]), "debug": bool(row["debug_log"])}
+              "pw_change": bool(row["pw_change"]), "debug": bool(row["debug_log"]),
+              "news_seen": row["news_seen"], "created_at": row["u_created"]}
     # sliding validity – written at most once an hour (saves the SD card)
     if row["last_seen"] < iso(t - timedelta(hours=1)):
         db.execute("UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id_hash = ?",
@@ -237,4 +254,9 @@ def login_required(*roles):
 
 def check_origin():
     if request.method not in ("GET", "HEAD", "OPTIONS") and not same_origin():
+        # 0.9.4: log why (validation #10 – an invitation check was rejected once and the cause was unknown);
+        # Origin and Host are not secret, the body (token) is never logged
+        current_app.logger.warning("origin rejected: %s %s origin=%r host=%r referer=%r", request.method, request.path,
+                                   request.headers.get("Origin"), request.headers.get("Host"),
+                                   (request.headers.get("Referer") or "")[:100])
         abort(403)

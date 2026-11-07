@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Tests of the coach over lessons (Python port of coach.js, M4)."""
 import unittest
+from pathlib import Path
 
 from tests import coach as C
 
@@ -16,6 +17,40 @@ class TestConfig(unittest.TestCase):
     def test_constants_used(self):
         for name in C.CONSTS:
             self.assertTrue(hasattr(C, name), name)
+
+
+class TestTraceOrder(unittest.TestCase):
+    """0.10.11: lesson-end debug events must be written before traceEnd (after it tr() is a no-op)."""
+
+    def test_pace_events_before_trace_end(self):
+        src = (Path(__file__).resolve().parent.parent / 'web/js/main.js').read_text(encoding='utf-8')
+        end = src.index('traceEnd(saved.id')
+        for ev in ("tr('pace'", "tr('pwEnd'"):
+            self.assertLess(src.index(ev), end, ev)
+
+
+class TestLessonPace(unittest.TestCase):
+    """0.9.8 (validation #17): slow day = the whole lesson against the long-term reaction to the same characters."""
+    REF = {'K': 800, 'M': 1000}
+
+    def trials(self, factor, n=40):
+        return [{'ch': 'KM'[i % 2], 'ok': True, 'ttr': round(self.REF['KM'[i % 2]] * factor)} for i in range(n)]
+
+    def test_pace(self):
+        self.assertAlmostEqual(C.lesson_pace(self.trials(1.3), self.REF), 1.3, places=2)
+        self.assertGreaterEqual(C.lesson_pace(self.trials(1.3), self.REF), C.SLOW_DAY)
+        self.assertLess(C.lesson_pace(self.trials(1.05), self.REF), C.SLOW_DAY)
+
+    def test_not_enough(self):
+        self.assertIsNone(C.lesson_pace(self.trials(1.3, n=C.SLOW_DAY_MIN_N - 1), self.REF))
+        self.assertIsNone(C.lesson_pace(self.trials(1.3), None))
+        wrong = [dict(t, ok=False) for t in self.trials(1.3)]
+        self.assertIsNone(C.lesson_pace(wrong, self.REF))
+
+    def test_unknown_and_new_char_skipped(self):
+        ts = self.trials(1.0) + [{'ch': 'X', 'ok': True, 'ttr': 9000}] * 50
+        self.assertAlmostEqual(C.lesson_pace(ts, self.REF), 1.0, places=2)
+        self.assertAlmostEqual(C.lesson_pace(self.trials(1.0, n=80), self.REF, new_char='K'), 1.0, places=2)
 
 
 class TestConfirm(unittest.TestCase):
@@ -96,6 +131,73 @@ class TestLoad(unittest.TestCase):
         self.assertTrue(C.fatigue_signal({'acc': 0.9, 'ttr': 600}, {'acc': 0.8, 'ttr': 600})['tired'])
         self.assertFalse(C.fatigue_signal({'acc': 0.9, 'ttr': 600}, {'acc': 0.85, 'ttr': 700})['tired'])
         self.assertFalse(C.fatigue_signal(None, {'acc': 0.5, 'ttr': 1})['tired'])
+
+
+class TestPaceWatch(unittest.TestCase):
+    """0.10.5 (Z-17, shadow): fatigue against the long-term reaction during a lesson (validation #17)."""
+    REF = {'K': 800, 'M': 900, 'R': 1000}
+
+    def feed(self, ratios, ok=None, dt=2.3, ref=REF, count=True):
+        w = C.PaceWatch(ref)
+        chars = list(self.REF)
+        props = []
+        for i, r in enumerate(ratios):
+            ch = chars[i % 3]
+            res = w.add({'ch': ch, 'ok': True if ok is None else ok[i], 'ttr': round(self.REF[ch] * r)}, i * dt, count)
+            if res['propose']:
+                props.append(i * dt)
+        return w, props
+
+    def test_usual_pace_is_silent(self):
+        w, props = self.feed([1.0, 1.1, 0.95, 1.17] * 60)  # a normal morning (max window 1.17 in the backtest)
+        self.assertEqual(props, [])
+        self.assertLess(w.max['med'], C.PACE_ON)
+
+    def test_tired_from_the_start(self):
+        """The session-start baseline cannot see this; the long-term reference can."""
+        w, props = self.feed([1.35] * 200)
+        self.assertTrue(props)
+        # signal from PACE_MIN_REL trials on, proposal after PACE_HOLD_S
+        self.assertLessEqual(props[0], (C.PACE_MIN_REL + 1) * 2.3 + C.PACE_HOLD_S + 2.3)
+        self.assertGreaterEqual(props[0], C.PACE_HOLD_S)
+
+    def test_hysteresis_keeps_the_signal(self):
+        """Once on, a window between PACE_OFF and PACE_ON does not interrupt it (the old detector restarted the hold)."""
+        seq = [1.4] * 40 + [1.2] * 60
+        _, props = self.feed(seq)
+        self.assertTrue(props)
+        _, props = self.feed([1.0] * 40 + [1.2] * 60)  # never above PACE_ON → nothing
+        self.assertEqual(props, [])
+
+    def test_lapses(self):
+        """Microsleeps: 6 of 20 reactions ≥ 2× the usual one switch the signal on even with a normal median."""
+        seq = ([1.0] * 7 + [2.5] * 3) * 30   # 6 lapses per 20, median 1.0
+        _, props = self.feed(seq)
+        self.assertTrue(props)
+        _, props = self.feed(([1.0] * 9 + [2.5]) * 30)  # 2 per 20 → nothing
+        self.assertEqual(props, [])
+        ok = ([True] * 7 + [False] * 3) * 30  # wrong answers count as lapses too
+        _, props = self.feed([1.0] * 300, ok=ok)
+        self.assertTrue(props)
+
+    def test_no_reference_or_warmup(self):
+        self.assertEqual(self.feed([2.0] * 200, ref=None)[1], [])
+        self.assertEqual(self.feed([2.0] * 200, count=False)[1], [])
+
+    def test_reset_after_proposal_and_pause(self):
+        w, props = self.feed([1.4] * 300)
+        self.assertGreaterEqual(len(props), 2)
+        self.assertGreater(props[1] - props[0], C.PACE_HOLD_S)  # measured anew after each would-be proposal
+        self.assertEqual(len(w.events), len(props))
+        w.reset()
+        self.assertEqual(w.win, [])
+
+    def test_js_wired_in_shadow_mode(self):
+        """Owner 2026-11-07: shadow only – the lesson writes 'pw' to the trace and never proposes a pause from it."""
+        main = (Path(__file__).resolve().parent.parent / 'web/js/main.js').read_text()
+        self.assertIn("L.paceWatch.add(", main)
+        self.assertIn("tr('pw'", main)
+        self.assertNotRegex(main, r"pw\.propose[^\n]*fatPending")
 
 
 class TestFatigueMonitor(unittest.TestCase):

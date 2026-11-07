@@ -47,16 +47,40 @@ def align(sent, typed):
     return ops[::-1]
 
 
-def score(ops, sent, typed):
-    c = {'ok': 0, 'sub': 0, 'del': 0, 'ins': 0}
+def ignored_ops(ops, skip):
+    """M9 part 2: operations on a masked sent character and extra characters right next to one do not count."""
+    out = [False] * len(ops)
+    if not skip or not any(skip):
+        return out
+    prev, nxt, m = [False] * len(ops), [False] * len(ops), False
+    for k, o in enumerate(ops):
+        prev[k] = m
+        if o['s'] is not None:
+            m = bool(skip[o['s']])
+    m = False
+    for k in range(len(ops) - 1, -1, -1):
+        nxt[k] = m
+        if ops[k]['s'] is not None:
+            m = bool(skip[ops[k]['s']])
+    return [bool(skip[o['s']]) if o['s'] is not None else prev[k] or nxt[k] for k, o in enumerate(ops)]
+
+
+def score(ops, sent, typed, skip=None):
+    c = {'ok': 0, 'sub': 0, 'del': 0, 'ins': 0, 'mask': 0}
     conf = {}
-    for o in ops:
+    ign = ignored_ops(ops, skip)
+    for k, o in enumerate(ops):
+        if ign[k]:
+            if o['s'] is not None:
+                c['mask'] += 1
+            continue
         c[o['op']] += 1
         if o['op'] == 'sub':
             k = f"{sent[o['s']]}→{typed[o['t']]}"
             conf[k] = conf.get(k, 0) + 1
-    den = len(sent) + c['ins']
-    return {**c, 'n': len(sent), 'acc': c['ok'] / den if den else None, 'conf': conf}
+    n = len(sent) - c['mask']
+    den = n + c['ins']
+    return {**c, 'n': n, 'acc': c['ok'] / den if den else None, 'conf': conf}
 
 
 def median(arr):
@@ -121,7 +145,7 @@ def word_lag(samples):
     return {'lagW': r1(median(wd)), 'lagWP90': percentile(wd, 0.9)} if wd else {'lagW': None, 'lagWP90': None}
 
 
-def word_results(words, ops):
+def word_results(words, ops, skip=None):
     word_of = [k for k, wd in enumerate(words) for _ in wd]
     ok = [True] * len(words)
     next_word = [-1] * len(ops)
@@ -130,13 +154,14 @@ def word_results(words, ops):
         next_word[k] = nw
         if ops[k]['s'] is not None:
             nw = word_of[ops[k]['s']]
+    ign = ignored_ops(ops, skip)
     last = -1
     for k, o in enumerate(ops):
         if o['s'] is not None:
             last = word_of[o['s']]
-            if o['op'] != 'ok':
+            if o['op'] != 'ok' and not ign[k]:
                 ok[last] = False
-        elif last >= 0 and next_word[k] == last:
+        elif not ign[k] and last >= 0 and next_word[k] == last:
             ok[last] = False
     return ok
 
@@ -145,17 +170,18 @@ def evaluate(words, chars, typed):
     sent = [c['ch'] for c in chars]
     tch = [x['ch'] for x in typed]
     ops = align(sent, tch)
-    return {'ops': ops, 'sc': score(ops, sent, tch),
+    skip = [bool(c.get('mask')) for c in chars] if any(c.get('mask') for c in chars) else None
+    return {'ops': ops, 'sc': score(ops, sent, tch, skip),
             'lags': lag_samples(ops, [c['end'] for c in chars], [x['t'] for x in typed], [c['w'] for c in chars]),
-            'words': word_results(words, ops)}
+            'words': word_results(words, ops, skip)}
 
 
 def lesson_summary(rounds):
-    c = {'ok': 0, 'sub': 0, 'del': 0, 'ins': 0, 'n': 0}
+    c = {'ok': 0, 'sub': 0, 'del': 0, 'ins': 0, 'n': 0, 'mask': 0}
     conf, lags, wn, wok = {}, [], 0, 0
     for r in rounds:
         for k in c:
-            c[k] += r['ev']['sc'][k]
+            c[k] += r['ev']['sc'].get(k) or 0
         for k, v in r['ev']['sc']['conf'].items():
             conf[k] = conf.get(k, 0) + v
         lags += r['ev']['lags']

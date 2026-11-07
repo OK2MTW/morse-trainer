@@ -120,9 +120,78 @@ def part_stats(ts, ref=None, new_char=None):
     return out
 
 
+SLOW_DAY = CONSTS['SLOW_DAY']
+SLOW_DAY_MIN_N = int(CONSTS['SLOW_DAY_MIN_N'])
+
+
+def lesson_pace(trials, ref, new_char=None):
+    """0.9.8 (Z-17): median TTR / long-term reaction of the same character (correct answers), None below SLOW_DAY_MIN_N."""
+    if not ref:
+        return None
+    r = sorted(t['ttr'] / ref[t['ch']] for t in trials
+               if t['ok'] and t.get('ttr') is not None and t['ch'] != new_char and ref.get(t['ch']))
+    if len(r) < SLOW_DAY_MIN_N:
+        return None
+    m = len(r) >> 1
+    return r[m] if len(r) % 2 else (r[m - 1] + r[m]) / 2
+
+
 def fatigue_ref(prior):
     ref = {c: p['ttr'] for c, p in (prior or {}).items() if p and p.get('ttr') and p.get('n', 0) >= FATIGUE_REF_MIN_N}
     return ref or None
+
+
+PACE_WIN_N = int(CONSTS['PACE_WIN_N'])
+PACE_MIN_REL = int(CONSTS['PACE_MIN_REL'])
+PACE_ON = CONSTS['PACE_ON']
+PACE_OFF = CONSTS['PACE_OFF']
+LAPSE_X = CONSTS['LAPSE_X']
+LAPSE_WIN_N = int(CONSTS['LAPSE_WIN_N'])
+LAPSE_N = int(CONSTS['LAPSE_N'])
+PACE_HOLD_S = CONSTS['PACE_HOLD_S']
+
+
+class PaceWatch:
+    """0.10.5 (Z-17, shadow): window vs. the long-term reaction + lapses, hysteresis, hold (port of coach.js)."""
+
+    def __init__(self, ref):
+        self.ref = ref or None
+        self.events = []
+        self.max = {'med': None, 'lapses': 0}
+        self.reset()
+
+    def reset(self):
+        self.win, self.since, self.on = [], None, False
+
+    def _rel(self, t):
+        return t['ttr'] / self.ref[t['ch']] if t['ok'] and t.get('ttr') is not None and self.ref.get(t['ch']) else None
+
+    def add(self, trial, active_s, count=True):
+        none = {'propose': False, 'med': None, 'lapses': 0}
+        if not self.ref or not count:
+            return none
+        self.win.append(trial)
+        if len(self.win) > max(PACE_WIN_N, LAPSE_WIN_N):
+            self.win.pop(0)
+        rs = sorted(x for x in (self._rel(t) for t in self.win[-PACE_WIN_N:]) if x is not None)
+        m = len(rs) >> 1
+        med = None if len(rs) < PACE_MIN_REL else rs[m] if len(rs) % 2 else (rs[m - 1] + rs[m]) / 2
+        last = self.win[-LAPSE_WIN_N:]
+        lapses = sum(1 for t in last if not t['ok'] or ((r := self._rel(t)) is not None and r >= LAPSE_X))
+        if med is not None and med > (self.max['med'] or 0):
+            self.max['med'] = med
+        if len(last) >= LAPSE_WIN_N and lapses > self.max['lapses']:
+            self.max['lapses'] = lapses
+        sig_on = (med is not None and med >= PACE_ON) or (len(last) >= LAPSE_WIN_N and lapses >= LAPSE_N)
+        if not self.on and sig_on:
+            self.on, self.since = True, active_s
+        elif self.on and not sig_on and not (med is not None and med >= PACE_OFF):
+            self.on, self.since = False, None
+        propose = self.on and active_s - self.since > PACE_HOLD_S
+        if propose:
+            self.events.append({'t': active_s, 'med': med, 'lapses': lapses})
+            self.reset()
+        return {'propose': propose, 'med': med, 'lapses': lapses}
 
 
 class FatigueMonitor:

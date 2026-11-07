@@ -11,12 +11,13 @@ const KEY_DEVICE = 'morse-device';         // settings of this device only (volu
 const cacheKey = (uid) => `morse-cache-${uid}`;
 const LEGACY = ['morse-settings', 'morse-progress', 'morse-m0-settings']; // M0/M1 without an account
 
-export const DEFAULT_SETTINGS = { wpm: 20, fwpm: 15, freq: 600, volume: 0.7, lessonMin: 5, autoSpeed: 1, lang: null };
+export const DEFAULT_SETTINGS = { wpm: 20, fwpm: 15, freq: 600, volume: 0.7, lessonMin: 5, autoSpeed: 1, extraChars: 0, lang: null };
 export const DEFAULT_PROGRESS = { level: 2, introduced: [], history: [] };
-const SYNCED_SETTINGS = ['wpm', 'fwpm', 'freq', 'lessonMin', 'autoSpeed', 'lang']; // I18N: language follows the account
+const SYNCED_SETTINGS = ['wpm', 'fwpm', 'freq', 'lessonMin', 'autoSpeed', 'extraChars', 'lang']; // I18N: language follows the account
 // Lesson mode – stored value (lessons, traces): 'znak' = character by character with an answer, 'skluz' = copy behind.
 export const MODE_CHAR = 'znak';
 export const MODE_COPY = 'skluz';
+export const MODE_HEAD = 'hlava'; // 0.10.14: head copy (U6) – listen without typing, then the key data
 const HISTORY_MAX = 500;
 
 /** Hard limit of the character speed (R1): older stored settings below 12 WPM are raised. */

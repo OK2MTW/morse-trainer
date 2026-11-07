@@ -29,7 +29,10 @@ export function initDemo({ player, kbd, ensureAudio, setHandlers }) {
     $('#demo-char').className = `big-char${cls ? ` ${cls}` : ''}`;
     $('#demo-status').textContent = status;
   };
-  const part = (name) => { for (const p of ['idle', 'play', 'result']) $(`#demo-${p}`).hidden = p !== name; };
+  const part = (name) => {
+    for (const p of ['idle', 'play', 'result']) $(`#demo-${p}`).hidden = p !== name;
+    $('#demo-band').hidden = name === 'play'; // 0.9.9: the band sample only outside the demo lesson
+  };
   const later = (fn, ms) => { clearTimeout(S.timer); S.timer = setTimeout(fn, ms); };
 
   function render() {

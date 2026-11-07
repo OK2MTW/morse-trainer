@@ -37,7 +37,7 @@ class TestModes(unittest.TestCase):
         self.assertEqual(C.computed_ulevel(U3, 51), 3)
         # copy-behind lessons spoil neither the character statistics nor U2 (they have no perChar or TTR)
         self.assertEqual(C.computed_ulevel(U3 + [S(41), S(60, acc=0.5)], 51), 3)
-        self.assertEqual(C.u1_status(U3 + [S(41)] * 30, 51)["good"], 51)
+        self.assertEqual(C.u1_status(U3 + [S(41)] * 30, 51)["good"], 44)  # 0.9.6: main programme
 
     def test_speed_ignores_copy(self):
         ls = [Z(0, fwpm=15), Z(20, fwpm=15)]
@@ -56,13 +56,53 @@ class TestModes(unittest.TestCase):
         self.assertEqual(m[0], "M")
 
 
+class TestEarlyCopy(unittest.TestCase):
+    """Z-16 (0.9.9): trial copy behind before U3 – from COPY_EARLY_MIN mastered characters, steps 1–2 only."""
+    FEW = [{"ch": c, "n": 10, "acc": 0.95, "ttr": 500} for c in C.KOCH[:12]]
+
+    def base(self, chars):
+        return [Z(0, per=self.FEW[:chars], fwpm=12)]
+
+    def test_available_from_min_chars(self):
+        self.assertFalse(C.copy_advice(self.base(C.COPY_EARLY_MIN - 1), 1)["available"])
+        a = C.copy_advice(self.base(C.COPY_EARLY_MIN), 1)
+        self.assertTrue(a["available"] and a["early"])
+        self.assertEqual(a["chars"], list(C.KOCH[:C.COPY_EARLY_MIN]))
+        self.assertEqual((a["step"], a["content"]), (1, "groups"))
+        self.assertIn(str(C.COPY_EARLY_LAST), a["next"])
+
+    def test_capped_at_step_2(self):
+        ls = self.base(12)
+        ls += [S(10, step=1), S(30, step=1)]
+        self.assertEqual(C.copy_advice(ls, 1)["change"]["to"], 2)  # up 1 → 2 like in U3
+        ls += [S(50, step=2), S(70, step=2)]
+        a = C.copy_advice(ls, 1)
+        self.assertEqual(a["step"], C.COPY_EARLY_LAST)
+        self.assertIsNone(a["change"])  # no step 3 before U3
+        ls += [S(90, step=2, acc=0.6), S(110, step=2, acc=0.6)]
+        self.assertEqual(C.copy_advice(ls, 1)["change"]["kind"], "ease")
+
+    def test_no_u4_from_trial(self):
+        ls = self.base(12) + [S(h, step=2, acc=0.99) for h in (10, 30, 50, 70)]
+        self.assertLess(C.computed_ulevel(ls, 12), 3)
+
+    def test_u3_continues_from_trial_step(self):
+        ls = U3 + [S(41, step=2), S(42, step=2, acc=0.8)]
+        a = C.copy_advice(ls, 3)
+        self.assertFalse(a["early"])
+        self.assertEqual(a["step"], 2)
+
+
 class TestLadder(unittest.TestCase):
     def test_start(self):
         a = C.copy_advice(U3, 3)
         self.assertTrue(a["available"])
         self.assertEqual((a["step"], a["content"], a["gapX"]), (1, "groups", 3.0))
         self.assertIsNone(a["change"])
-        self.assertFalse(C.copy_advice(U3[:1], 2)["available"])
+        # Z-16 (0.9.9): below U3 only a trial from mastered characters (here the whole set is mastered)
+        early = C.copy_advice(U3[:1], 2)
+        self.assertTrue(early["available"] and early["early"])
+        self.assertFalse(a["early"])
 
     def test_up_after_two_sessions(self):
         self.assertIsNone(C.copy_advice(U3 + [S(41)], 3)["change"])
@@ -99,7 +139,8 @@ class TestLadder(unittest.TestCase):
     def test_steps_one_change_at_a_time(self):
         # markLag is only the timing of feedback, not difficulty; wpm None = 20 WPM from the settings (U3)
         for a, b in zip(C.COPY_STEPS, C.COPY_STEPS[1:]):
-            changed = (a["content"] != b["content"]) + (a["gapX"] != b["gapX"]) + ((a["wpm"] or 20) != (b["wpm"] or 20))
+            changed = (a["content"] != b["content"]) + (a["gapX"] != b["gapX"]) + ((a["wpm"] or 20) != (b["wpm"] or 20)) \
+                + (a.get("band") != b.get("band"))  # M9: the band situation is a change too
             self.assertEqual(changed, 1, (a, b))
         self.assertEqual([s["step"] for s in C.COPY_STEPS], list(range(1, len(C.COPY_STEPS) + 1)))
 
@@ -190,16 +231,17 @@ class TestU4Ladder(unittest.TestCase):
             a = C.copy_advice(ls, 4)
             ls.append(S(h, step=a["step"], wpm=a["wpm"] or 20, fwpm=a["wpm"] or 20, drift=2, words=0.85))
             h += 20
-        self.assertEqual(C.copy_advice(ls, 4)["step"], len(C.COPY_STEPS))
+        self.assertEqual(C.copy_advice(ls, 4)["step"], C.COPY_U4_LAST)
         self.assertLess(C.computed_ulevel(ls, 51, stored=4), 5)  # words only 85 % → no U5
 
     def test_u5_criteria(self):
-        last = len(C.COPY_STEPS)
+        last = C.COPY_U4_LAST
         ok = self.U4 + [S(80, step=last, wpm=25, fwpm=25, words=0.92, drift=2),
                         S(100, step=last, wpm=25, fwpm=25, words=0.95, drift=3)]
         self.assertEqual(C.computed_ulevel(ok, 51, stored=4), 5)
         self.assertEqual(C.level_info(ok, 51, 4)["ulevel"], 5)
-        self.assertIn("U5", C.copy_advice(ok, 5)["next"])
+        a5 = C.copy_advice(ok, 5)  # M9: U5 → the ladder continues with QSOs
+        self.assertEqual((a5["step"], a5["content"], a5["change"]["kind"]), (C.COPY_U4_LAST + 1, "qso", "up"))
         bad = [
             [S(80, step=last, wpm=25, fwpm=25, words=0.92)],                                   # one session
             [S(80, step=last, wpm=25, fwpm=25, words=0.8), S(100, step=last, wpm=25, fwpm=25, words=0.95)],
@@ -224,6 +266,28 @@ class TestU4Ladder(unittest.TestCase):
         sm = C.copy_summary([S(41, step=3)])
         self.assertEqual((sm["step"], sm["wpm"], sm["words"], sm["lagW"]), (3, 20, None, None))
 
+
+class NavTest(unittest.TestCase):
+    """0.10.10 (Martin): copy behind and vocabulary as own views from the top bar, Progress in the user menu."""
+
+    def test_top_bar_and_views(self):
+        import re
+        from pathlib import Path
+        web = Path(__file__).resolve().parent.parent / "web"
+        html = (web / "index.html").read_text()
+        main = (web / "js" / "main.js").read_text()
+        nav = re.search(r'<nav class="tabs">(.*?)<div class="usermenu">', html, re.S).group(1)
+        self.assertEqual(re.findall(r'data-go="(\w+)"', nav), ["login", "demo", "home", "copyhome", "vocab"])
+        menu = re.search(r'<div id="user-menu".*?</div>', html, re.S).group(0)
+        self.assertIn('data-go="stats"', menu)
+        home = re.search(r'<section id="view-home".*?</section>', html, re.S).group(0)
+        self.assertNotIn("copy-card", home)
+        self.assertNotIn('data-go="vocab"', home)
+        copyhome = re.search(r'<section id="view-copyhome".*?</section>', html, re.S).group(0)
+        for i in ("copy-card", "btn-copy", "copy-locked"):
+            self.assertIn(f'id="{i}"', copyhome)
+        self.assertIn("'copyhome'", re.search(r"const TRAINING_VIEWS = \[(.*?)\]", main).group(1))
+        self.assertEqual(int(re.search(r"const COPY_EARLY_MIN = (\d+);", main).group(1)), C.COPY_EARLY_MIN)
 
 if __name__ == "__main__":
     unittest.main()

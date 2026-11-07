@@ -34,9 +34,9 @@ class TestWords(unittest.TestCase):
         raw = re.search(r'WORDS_LONG = `(.*?)`', T.WORDS_JS, re.S).group(1).split()
         self.assertEqual(raw, T.WORDS_LONG)
         self.assertFalse(set(T.WORDS_LONG) & set(T.WORDS))
-        self.assertGreaterEqual(len(T.ABBR), 60)
-        self.assertEqual(len(T.ABBR), len(set(T.ABBR)), [w for w in T.ABBR if T.ABBR.count(w) > 1])
-        for w in T.ABBR:  # only the project's character set
+        self.assertGreaterEqual(len(T.ALL_ABBR), 150)  # 0.10.9: forms of all abbreviations and Q codes of the vocabulary trainer
+        self.assertEqual(len(T.ALL_ABBR), len(set(T.ALL_ABBR)))
+        for w in T.ALL_ABBR:  # only the project's character set
             self.assertTrue(set(w) <= set(ALL), w)
 
 
@@ -103,25 +103,106 @@ class TestU4Content(unittest.TestCase):
         self.assertTrue(all('/' not in T.call(no_sl, self.rng) for _ in range(500)))
 
     def test_abbr_and_long(self):
-        a = T.make_items('abbr', ALL, 300, self.rng)
-        self.assertTrue(all(x in T.ABBR for x in a))
+        a = T.make_items('abbr', ALL, 300, self.rng, T.ALL_ABBR)
+        self.assertTrue(all(x in T.ALL_ABBR for x in a))
         lw = T.make_items('long', ALL, 300, self.rng)
         self.assertTrue(all(x in T.WORDS_LONG for x in lw))
         # few letters → filled up with shorter words / pseudo-words, but always only from mastered characters
         few = list('KMURESNAPTLWIO')
-        for x in T.make_items('long', few, 200, self.rng) + T.make_items('abbr', few, 200, self.rng):
+        for x in T.make_items('long', few, 200, self.rng) + T.make_items('abbr', few, 200, self.rng, T.ALL_ABBR):
             self.assertTrue(set(x) <= set(few), x)
 
     def test_mix_shares(self):
-        items = T.make_items('mix', ALL, 4000, self.rng)
-        calls = sum(bool(re.match(r'^([A-Z]{1,2}|[0-9][A-Z])[0-9][A-Z]{1,3}(/[PM])?$', x)) and x not in T.ABBR
+        items = T.make_items('mix', ALL, 4000, self.rng, T.ALL_ABBR)
+        calls = sum(bool(re.match(r'^([A-Z]{1,2}|[0-9][A-Z])[0-9][A-Z]{1,3}(/[PM])?$', x)) and x not in T.ALL_ABBR
                     for x in items) / len(items)
-        ab = sum(x in T.ABBR for x in items) / len(items)
+        ab = sum(x in T.ALL_ABBR and x not in T.WORDS and x not in T.WORDS_LONG for x in items) / len(items)
         wd = sum(x in T.WORDS or x in T.WORDS_LONG for x in items) / len(items)
         self.assertAlmostEqual(calls, 1 - T.MIX_WORDS - T.MIX_ABBR, delta=0.04)
         self.assertAlmostEqual(ab, T.MIX_ABBR, delta=0.04)
         self.assertAlmostEqual(wd, T.MIX_WORDS, delta=0.04)
 
 
+
+
+class TestQso(unittest.TestCase):
+    """M9 (U5): QSO lines from templates – only mastered characters, order kept, fallback to the mix."""
+    FULL = list(T.LETTERS + T.DIGITS + './?=')
+
+    def test_full_set(self):
+        import random
+        rng = random.Random(5).random
+        for _ in range(200):
+            line = T.qso_line(self.FULL, rng)
+            self.assertTrue(line)
+            self.assertTrue(all(c in self.FULL for w in line for c in w), line)
+            self.assertNotIn('{', ' '.join(line))
+
+    def test_order_and_repetitions_kept(self):
+        import random
+        items = T.make_items('qso', self.FULL, 60, random.Random(1).random)
+        self.assertEqual(len(items), 60)
+        self.assertTrue(any(a == b for a, b in zip(items, items[1:])), 'CQ CQ / call call repetitions belong to a QSO')
+
+    def test_fallback_without_needed_characters(self):
+        import random
+        chars = list('KMURESNAPTLWI')  # no digits → no call sign → no template fits
+        items = T.make_items('qso', chars, 10, random.Random(2).random)
+        self.assertEqual(len(items), 10)
+        self.assertTrue(all(c in chars for w in items for c in w))
+
+
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestAbbrFromVocab(unittest.TestCase):
+    """0.10.9: copy-behind abbreviations only from items mastered in the vocabulary trainer."""
+
+    def setUp(self):
+        self.rng = random.Random(5).random
+
+    @staticmethod
+    def stat(d):
+        return lambda lst, code: d.get((lst, code))
+
+    def test_forms_of_mastered_items_only(self):
+        self.assertEqual(T.copy_abbr_forms(self.stat({})), [])
+        st = {('abbr', 'TNX'): [3, 0, 1], ('q', 'QRL'): [5, 1, 1], ('pfx', 'OK'): [9, 0, 1],
+              ('abbr', 'FB'): [2, 0, 1],      # too few answers
+              ('abbr', 'UR'): [5, 2, 1],      # 60 % right
+              ('abbr', 'DE'): [5, 0, 0]}      # the last answer wrong
+        forms = T.copy_abbr_forms(self.stat(st))
+        self.assertIn('TNX', forms)
+        self.assertIn('TKS', forms)           # every form of the item
+        self.assertTrue(any(f.startswith('QRL') for f in forms))
+        self.assertFalse({'OK', 'OL', 'FB', 'UR', 'DE'} & set(forms))  # prefixes are not abbreviations; not mastered
+
+    def test_no_prosigns(self):
+        st = {('abbr', p): [3, 0, 1] for p in T.PROSIGNS}
+        self.assertEqual([f for f in T.copy_abbr_forms(self.stat(st)) if f in T.PROSIGNS], [])
+        self.assertFalse(set(T.PROSIGNS) & set(T.ALL_ABBR))
+
+    def test_nothing_mastered_gives_words(self):
+        for content in ('abbr', 'mix'):  # QRL, TNX, CQ are neither words nor pseudo-word templates
+            items = T.make_items(content, ALL, 1000, self.rng)
+            self.assertEqual([x for x in items if x in ('TNX', 'QRL', 'CQ', 'QSL', 'RST')], [], content)
+
+    def test_few_mastered_filled_with_words(self):
+        forms = ['TNX', 'TKS']
+        a = T.make_items('abbr', ALL, 3000, self.rng, forms)
+        share = sum(x in forms for x in a) / len(a)
+        self.assertAlmostEqual(share, len(forms) / T.ABBR_MIN, delta=0.04)
+        self.assertTrue(all(x in forms or x in T.WORDS or len(x) <= T.PSEUDO_MAX for x in a))
+        # a form needs mastered characters: without X no TNX
+        b = T.make_items('abbr', [c for c in ALL if c != 'X'], 500, self.rng, forms)
+        self.assertNotIn('TNX', b)
+
+    def test_js_wiring(self):
+        vocab_js, copy_js = T.VOCAB_JS, (T.ROOT / 'web/js/copylesson.js').read_text(encoding='utf-8')
+        self.assertIn('export function copyAbbrForms(stat)', vocab_js)
+        self.assertNotIn('abbr.js', T.CONTENT_JS)
+        self.assertFalse((T.ROOT / 'web/js/abbr.js').exists())
+        self.assertIn('export function makeItems(content, chars, n, rng = Math.random, abbrForms = [])', T.CONTENT_JS)
+        self.assertIn('makeItems(C.plan.content, C.plan.chars, ROUND_ITEMS, Math.random, C.abbrForms)', copy_js)
+        self.assertIn('vocabForms: () => vocab.copyForms()', (T.ROOT / 'web/js/main.js').read_text(encoding='utf-8'))

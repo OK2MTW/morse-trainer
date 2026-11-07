@@ -112,6 +112,78 @@ function partStats(ts, ref = null, newChar = null) {
   return { acc: ts.filter((t) => t.ok).length / ts.length, ttr, n: ts.length, ...(ref ? { rel: true } : {}) };
 }
 
+/**
+ * 0.9.8 (validation #17, Z-17): pace of the whole lesson against the user's long-term reaction to the same characters.
+ * Median of TTR / reference over correct answers after the warm-up; the newest character counts too once it has its own
+ * reference (it already reflects the learning phase). Returns the ratio, or null with fewer than SLOW_DAY_MIN_N trials.
+ * Backtest 2026-11-06 (Martin): very tired evenings 1.29 / 1.32, normal mornings 0.98 / 1.07.
+ */
+export const SLOW_DAY = 1.2;
+export const SLOW_DAY_MIN_N = 30;
+export function lessonPace(trials, ref, newChar = null) {
+  if (!ref) return null;
+  const r = trials.filter((t) => t.ok && t.ttr != null && t.ch !== newChar && ref[t.ch])
+    .map((t) => t.ttr / ref[t.ch]).sort((a, b) => a - b);
+  if (r.length < SLOW_DAY_MIN_N) return null;
+  const m = r.length >> 1;
+  return r.length % 2 ? r[m] : (r[m - 1] + r[m]) / 2;
+}
+
+/**
+ * 0.10.5 (Z-17, validation #17) – SHADOW MODE: fatigue against the user's long-term reaction during a lesson.
+ * The session-start baseline of FatigueMonitor cannot see fatigue that is there from the start, and its 20-trial window
+ * jumps. PaceWatch compares the last PACE_WIN_N counted trials with the long-term reaction to the same characters
+ * (window median of TTR / ref ≥ PACE_ON switches the signal on, it lasts until it drops below PACE_OFF) and counts
+ * lapses (a wrong answer or a reaction ≥ LAPSE_X × the usual one; ≥ LAPSE_N of the last LAPSE_WIN_N switch it on too).
+ * A signal lasting > PACE_HOLD_S would be a pause proposal. Backtest 2026-11-07 (5 traced lessons of the owner): tired
+ * evenings at 3.6 / 4.9 min, normal mornings never (max 1.17, 3 lapses). Owner's decision 2026-11-07: shadow only –
+ * written to the debug trace, no proposal; switched on after evaluation of more evenings.
+ */
+export const PACE_WIN_N = 40;
+export const PACE_MIN_REL = 20;  // window median only from ≥ 20 relative reactions
+export const PACE_ON = 1.3;
+export const PACE_OFF = 1.15;
+export const LAPSE_X = 2;
+export const LAPSE_WIN_N = 20;
+export const LAPSE_N = 6;
+export const PACE_HOLD_S = 60;
+
+export class PaceWatch {
+  /** ref = fatigueRef(prior); without it (beginner) the watch stays silent. */
+  constructor(ref) {
+    this.ref = ref || null;
+    this.events = []; // {t, med, lapses} – would-be proposals
+    this.max = { med: null, lapses: 0 };
+    this.reset();
+  }
+
+  /** After a pause (and after a would-be proposal) the measurement starts anew. */
+  reset() { this.win = []; this.since = null; this.on = false; }
+
+  _rel(t) { return t.ok && t.ttr != null && this.ref[t.ch] ? t.ttr / this.ref[t.ch] : null; }
+
+  /** After each trial (count = false in the warm-up). Returns {propose, med, lapses}. */
+  add(trial, activeS, count = true) {
+    const none = { propose: false, med: null, lapses: 0 };
+    if (!this.ref || !count) return none;
+    this.win.push(trial);
+    if (this.win.length > Math.max(PACE_WIN_N, LAPSE_WIN_N)) this.win.shift();
+    const rs = this.win.slice(-PACE_WIN_N).map((t) => this._rel(t)).filter((x) => x !== null).sort((a, b) => a - b);
+    const m = rs.length >> 1;
+    const med = rs.length < PACE_MIN_REL ? null : rs.length % 2 ? rs[m] : (rs[m - 1] + rs[m]) / 2;
+    const last = this.win.slice(-LAPSE_WIN_N);
+    const lapses = last.filter((t) => { const r = this._rel(t); return !t.ok || (r !== null && r >= LAPSE_X); }).length;
+    if (med !== null && med > (this.max.med ?? 0)) this.max.med = med;
+    if (last.length >= LAPSE_WIN_N && lapses > this.max.lapses) this.max.lapses = lapses;
+    const sigOn = (med !== null && med >= PACE_ON) || (last.length >= LAPSE_WIN_N && lapses >= LAPSE_N);
+    if (!this.on && sigOn) { this.on = true; this.since = activeS; }
+    else if (this.on && !sigOn && !(med !== null && med >= PACE_OFF)) { this.on = false; this.since = null; }
+    const propose = this.on && activeS - this.since > PACE_HOLD_S;
+    if (propose) { this.events.push({ t: activeS, med, lapses }); this.reset(); }
+    return { propose, med, lapses };
+  }
+}
+
 /** Reference reactions of characters from long-term statistics {ch: {n, ttr}} → {ch: ttr} or null (beginner). */
 export function fatigueRef(prior) {
   const ref = {};

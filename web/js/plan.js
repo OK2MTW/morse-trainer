@@ -108,8 +108,9 @@ export function renderPlan(root, info, { onQuiz } = {}) {
   if (info?.copy?.available) {
     // M7: copy-behind ladder
     const cp = info.copy;
-    root.append(el('p', 'plan-line', t('plan.copy', { step: cp.step, of: cp.of, name: cp.name, gap: cp.gap })));
-    root.append(el('p', 'plan-line hint', `${cp.next} ${t('plan.copyKeep')}`));
+    root.append(el('p', 'plan-line', cp.early ? t('plan.copyEarly', { step: cp.step, name: cp.name })
+      : t('plan.copy', { step: cp.step, of: cp.of, name: cp.name, gap: cp.gap })));
+    root.append(el('p', 'plan-line hint', cp.early ? cp.next : `${cp.next} ${t('plan.copyKeep')}`));
   }
   if (!info || !info.archetype) {
     root.append(el('p', 'hint', t('plan.quizIntro')));

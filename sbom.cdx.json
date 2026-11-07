@@ -1,0 +1,465 @@
+{
+ "bomFormat": "CycloneDX",
+ "components": [
+  {
+   "bom-ref": "pkg:deb/debian/nginx@1.22.1-9+deb12u9",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-2-Clause"
+     }
+    }
+   ],
+   "name": "nginx",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system"
+    }
+   ],
+   "purl": "pkg:deb/debian/nginx@1.22.1-9+deb12u9",
+   "type": "application",
+   "version": "1.22.1-9+deb12u9"
+  },
+  {
+   "bom-ref": "pkg:pypi/argon2-cffi@25.1.0",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ],
+   "name": "argon2-cffi",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "venv (pip)"
+    }
+   ],
+   "purl": "pkg:pypi/argon2-cffi@25.1.0",
+   "type": "library",
+   "version": "25.1.0"
+  },
+  {
+   "bom-ref": "pkg:pypi/argon2-cffi-bindings@26.1.0",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ],
+   "name": "argon2-cffi-bindings",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "venv (pip)"
+    }
+   ],
+   "purl": "pkg:pypi/argon2-cffi-bindings@26.1.0",
+   "type": "library",
+   "version": "26.1.0"
+  },
+  {
+   "bom-ref": "pkg:pypi/blinker@1.5",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ],
+   "name": "blinker",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system (Debian)"
+    },
+    {
+     "name": "morse:deb",
+     "value": "python3-blinker 1.5-1"
+    }
+   ],
+   "purl": "pkg:pypi/blinker@1.5",
+   "type": "library",
+   "version": "1.5"
+  },
+  {
+   "bom-ref": "pkg:pypi/cffi@2.1.1",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT-0"
+     }
+    }
+   ],
+   "name": "cffi",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "venv (pip)"
+    }
+   ],
+   "purl": "pkg:pypi/cffi@2.1.1",
+   "type": "library",
+   "version": "2.1.1"
+  },
+  {
+   "bom-ref": "pkg:pypi/click@8.1.3",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-3-Clause"
+     }
+    }
+   ],
+   "name": "click",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system (Debian)"
+    },
+    {
+     "name": "morse:deb",
+     "value": "python3-click 8.1.3-2"
+    }
+   ],
+   "purl": "pkg:pypi/click@8.1.3",
+   "type": "library",
+   "version": "8.1.3"
+  },
+  {
+   "bom-ref": "pkg:pypi/flask@2.2.2",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-3-Clause"
+     }
+    }
+   ],
+   "name": "Flask",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system (Debian)"
+    },
+    {
+     "name": "morse:deb",
+     "value": "python3-flask 2.2.2-3"
+    }
+   ],
+   "purl": "pkg:pypi/flask@2.2.2",
+   "type": "library",
+   "version": "2.2.2"
+  },
+  {
+   "bom-ref": "pkg:pypi/itsdangerous@2.1.2",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-3-Clause"
+     }
+    }
+   ],
+   "name": "itsdangerous",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system (Debian)"
+    },
+    {
+     "name": "morse:deb",
+     "value": "python3-itsdangerous 2.1.2-3"
+    }
+   ],
+   "purl": "pkg:pypi/itsdangerous@2.1.2",
+   "type": "library",
+   "version": "2.1.2"
+  },
+  {
+   "bom-ref": "pkg:pypi/jinja2@3.1.2",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-3-Clause"
+     }
+    }
+   ],
+   "name": "Jinja2",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system (Debian)"
+    },
+    {
+     "name": "morse:deb",
+     "value": "python3-jinja2 3.1.2-1+deb12u3"
+    }
+   ],
+   "purl": "pkg:pypi/jinja2@3.1.2",
+   "type": "library",
+   "version": "3.1.2"
+  },
+  {
+   "bom-ref": "pkg:pypi/markupsafe@2.1.2",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-3-Clause"
+     }
+    }
+   ],
+   "name": "MarkupSafe",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system (Debian)"
+    },
+    {
+     "name": "morse:deb",
+     "value": "python3-markupsafe 2.1.2-1+b1"
+    }
+   ],
+   "purl": "pkg:pypi/markupsafe@2.1.2",
+   "type": "library",
+   "version": "2.1.2"
+  },
+  {
+   "bom-ref": "pkg:github/scp93ch/morse-pro@b728a41",
+   "externalReferences": [
+    {
+     "type": "vcs",
+     "url": "https://github.com/scp93ch/morse-pro"
+    }
+   ],
+   "hashes": [
+    {
+     "alg": "SHA-256",
+     "content": "c142d771ee5a6e6ed8661d977c5e1edb02a359cad01a28ea2f133fce3511fe5b"
+    }
+   ],
+   "licenses": [
+    {
+     "license": {
+      "id": "EUPL-1.2"
+     }
+    }
+   ],
+   "name": "morse-pro",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "vendored (web/vendor/morse-pro)"
+    },
+    {
+     "name": "morse:modified",
+     "value": "yes – see ZDROJ.txt"
+    },
+    {
+     "name": "morse:file:LICENSE",
+     "value": "57fb42fbcd0b037ce528ed8f72f1ec095d67bc6825ecf1448ff39be1fe68a4b4"
+    },
+    {
+     "name": "morse:file:ZDROJ.txt",
+     "value": "4161cf5684ea7101d98d2282fc907a9bb78ab5b476bb35eaee02f9297f0a02c3"
+    },
+    {
+     "name": "morse:file:morse-pro-cw.js",
+     "value": "d24ec3a8e48cbd5d203a25fe6a908e29b0883280f565d232eeaaedde554bccb0"
+    },
+    {
+     "name": "morse:file:morse-pro-message.js",
+     "value": "fe90406d075df970c64c7d812888914e54862bd062506fb8383d266d735f520e"
+    },
+    {
+     "name": "morse:file:morse-pro-wpm.js",
+     "value": "712fa10bc2009a70d3a35df1229e3f7aa0d7643d54baf73a44dd4fbdb500f9d9"
+    },
+    {
+     "name": "morse:file:morse-pro.js",
+     "value": "59d06f83e4b727b76237946925b7c2afea326f52e43e72567e32e872c6d07a74"
+    }
+   ],
+   "purl": "pkg:github/scp93ch/morse-pro@b728a41",
+   "type": "library",
+   "version": "b728a41"
+  },
+  {
+   "bom-ref": "pkg:generic/openssl@3.0.20",
+   "licenses": [
+    {
+     "license": {
+      "id": "Apache-2.0"
+     }
+    }
+   ],
+   "name": "openssl",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system"
+    }
+   ],
+   "purl": "pkg:generic/openssl@3.0.20",
+   "type": "library",
+   "version": "3.0.20"
+  },
+  {
+   "bom-ref": "pkg:pypi/pycparser@3.12",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-3-Clause"
+     }
+    }
+   ],
+   "name": "pycparser",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "venv (pip)"
+    }
+   ],
+   "purl": "pkg:pypi/pycparser@3.12",
+   "type": "library",
+   "version": "3.12"
+  },
+  {
+   "bom-ref": "pkg:generic/sqlite@3.40.1",
+   "licenses": [
+    {
+     "license": {
+      "id": "blessing"
+     }
+    }
+   ],
+   "name": "sqlite",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system"
+    }
+   ],
+   "purl": "pkg:generic/sqlite@3.40.1",
+   "type": "library",
+   "version": "3.40.1"
+  },
+  {
+   "bom-ref": "pkg:pypi/waitress@3.0.2",
+   "licenses": [
+    {
+     "license": {
+      "id": "ZPL-2.1"
+     }
+    }
+   ],
+   "name": "waitress",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "venv (pip)"
+    }
+   ],
+   "purl": "pkg:pypi/waitress@3.0.2",
+   "type": "library",
+   "version": "3.0.2"
+  },
+  {
+   "bom-ref": "pkg:pypi/werkzeug@2.2.2",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-3-Clause"
+     }
+    }
+   ],
+   "name": "Werkzeug",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system (Debian)"
+    },
+    {
+     "name": "morse:deb",
+     "value": "python3-werkzeug 2.2.2-3+deb12u1"
+    }
+   ],
+   "purl": "pkg:pypi/werkzeug@2.2.2",
+   "type": "library",
+   "version": "2.2.2"
+  },
+  {
+   "bom-ref": "pkg:generic/python@3.11.2",
+   "licenses": [
+    {
+     "license": {
+      "id": "PSF-2.0"
+     }
+    }
+   ],
+   "name": "python",
+   "properties": [
+    {
+     "name": "morse:source",
+     "value": "system"
+    }
+   ],
+   "purl": "pkg:generic/python@3.11.2",
+   "type": "platform",
+   "version": "3.11.2"
+  }
+ ],
+ "dependencies": [
+  {
+   "dependsOn": [
+    "pkg:deb/debian/nginx@1.22.1-9+deb12u9",
+    "pkg:pypi/argon2-cffi@25.1.0",
+    "pkg:pypi/argon2-cffi-bindings@26.1.0",
+    "pkg:pypi/blinker@1.5",
+    "pkg:pypi/cffi@2.1.1",
+    "pkg:pypi/click@8.1.3",
+    "pkg:pypi/flask@2.2.2",
+    "pkg:pypi/itsdangerous@2.1.2",
+    "pkg:pypi/jinja2@3.1.2",
+    "pkg:pypi/markupsafe@2.1.2",
+    "pkg:github/scp93ch/morse-pro@b728a41",
+    "pkg:generic/openssl@3.0.20",
+    "pkg:pypi/pycparser@3.12",
+    "pkg:generic/sqlite@3.40.1",
+    "pkg:pypi/waitress@3.0.2",
+    "pkg:pypi/werkzeug@2.2.2",
+    "pkg:generic/python@3.11.2"
+   ],
+   "ref": "pkg:github/OK2MTW/morse-trainer@0.10.16"
+  }
+ ],
+ "metadata": {
+  "component": {
+   "bom-ref": "pkg:github/OK2MTW/morse-trainer@0.10.16",
+   "licenses": [
+    {
+     "license": {
+      "id": "EUPL-1.2"
+     }
+    }
+   ],
+   "name": "morse-trainer",
+   "purl": "pkg:github/OK2MTW/morse-trainer@0.10.16",
+   "type": "application",
+   "version": "0.10.16"
+  },
+  "tools": {
+   "components": [
+    {
+     "name": "tools.sbom (morse-trainer)",
+     "type": "application",
+     "version": "0.10.16"
+    }
+   ]
+  }
+ },
+ "serialNumber": "urn:uuid:e106d621-92c5-5589-824d-6338ecd97092",
+ "specVersion": "1.5",
+ "version": 1
+}

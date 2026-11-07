@@ -48,6 +48,12 @@ body {
   .brand-short { display: inline; }
   .tabs button { padding: 8px 10px; font-size: 1rem; }
 }
+/* 0.10.10: Home · Copy · Abbrev. + avatar must fit a narrow phone */
+@media (max-width: 380px) {
+  .top { padding: 8px 8px; gap: 4px; }
+  .tabs { gap: 2px; }
+  .tabs button { padding: 8px 6px; font-size: .95rem; }
+}
 
 .content { flex: 1; padding: 16px; max-width: 760px; width: 100%; margin: 0 auto; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
@@ -91,6 +97,11 @@ th { color: var(--muted); font-weight: 500; }
   justify-content: center; padding: 16px; z-index: 10;
 }
 .overlay .card { width: 100%; max-width: 360px; }
+.overlay .news-card { max-width: 440px; max-height: 85vh; overflow-y: auto; }
+.news-card h3 { color: var(--muted); }
+.news-card ul { margin: 0 0 8px; padding-left: 1.2em; }
+.news-card li { margin: 4px 0; }
+.news-card #news-ok { width: 100%; margin-top: 8px; }
 
 /* ---- result ---- */
 .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; margin-bottom: 8px; }
@@ -247,6 +258,20 @@ table.weeks tr.current td { font-weight: 600; }
 .copy-review .sub { color: var(--bad); font-weight: 700; text-decoration: underline; }
 .copy-review .del { color: var(--miss); font-weight: 700; }
 .copy-review .ins { color: var(--bad); text-decoration: line-through; }
+.copy-review .mask { color: var(--muted); opacity: .6; }
+
+/* U6 head copy (0.10.14) */
+.head-stage { max-width: 32rem; margin: 0 auto; }
+.head-form { display: grid; gap: 10px; margin: 12px 0; }
+.head-form .hd-q { display: grid; gap: 4px; }
+.head-form .hd-q > span:first-child { font-size: .9rem; color: var(--muted); }
+.head-form input { font-family: ui-monospace, "DejaVu Sans Mono", monospace; font-size: 1.25rem; text-transform: uppercase;
+  padding: 8px 10px; }
+.head-form .hd-q.ok input { border-color: var(--ok); color: var(--ok); }
+.head-form .hd-q.bad input { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
+.head-form .hd-right { font-family: ui-monospace, "DejaVu Sans Mono", monospace; color: var(--ok); font-weight: 700; }
+.head-reveal { font-family: ui-monospace, "DejaVu Sans Mono", monospace; font-size: 1rem; color: var(--muted);
+  overflow-wrap: anywhere; border-top: 1px solid var(--line); padding-top: 8px; }
 .copy-review .legend { font-family: system-ui, sans-serif; font-size: .8rem; color: var(--muted); margin-top: 6px;
   white-space: normal; }
 
@@ -303,3 +328,47 @@ table.weeks tr.current td { font-weight: 600; }
 /* ---- demo without an account (0.9.2) ---- */
 .demo-score { font-size: 1.4rem; font-weight: 700; margin: 4px 0; }
 #view-demo .stage { min-height: 150px; }
+/* 0.9.6: users online – subscript badge in the bottom right corner of the user icon */
+.tabs .avatar { position: relative; }
+.avatar .online { position: absolute; right: -6px; bottom: -6px; min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: 8px; background: var(--card); color: var(--fg); border: 1px solid var(--line);
+  font-size: .65rem; font-weight: 700; line-height: 14px; text-align: center; vertical-align: baseline; }
+.avatar .online[hidden] { display: none; }
+/* ZB band sound lab (development) */
+.band-presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.band-presets button.active { outline: 2px solid var(--accent); }
+.band-slider { display: block; margin: 10px 0; }
+.band-slider input[type="range"] { display: block; width: 100%; }
+.band-text { font-family: monospace; font-size: 1.05rem; word-break: break-word; }
+/* 0.9.9 demo: band sample */
+.demo-band-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.demo-band-text { min-height: 3.2em; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+  letter-spacing: .04em; }
+/* 0.10.0 vocabulary */
+.vocab-q-code { font-size: 2.6rem; font-weight: 700; text-align: center; letter-spacing: .06em; margin: 8px 0 14px; }
+.vocab-sound { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; margin: -6px 0 12px; }
+.vocab-sound label.check { display: flex; gap: 8px; align-items: center; }
+.vocab-sound label.check input { width: 18px; height: 18px; }
+.vocab-opts { display: flex; flex-direction: column; gap: 8px; }
+.vocab-opt { text-align: left; padding: 14px; font-size: 1.05rem; }
+.vocab-opt.right { background: #2e7d32; color: #fff; border-color: #2e7d32; }
+.vocab-opt.wrong { background: #c62828; color: #fff; border-color: #c62828; }
+.vocab-opt:disabled { opacity: 1; }
+.vocab-table { width: 100%; border-collapse: collapse; }
+.vocab-table th, .vocab-table td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.vocab-code { font-family: monospace; font-weight: 700; white-space: nowrap; }
+.vocab-mistakes { margin: 4px 0 12px; padding-left: 20px; }
+/* 0.10.2 vocabulary – printable lists (print dialog → Save as PDF) */
+#vocab-print { display: none; }
+@media print {
+  @page { margin: 15mm 14mm; } /* 0.10.3: printers need margins */
+  body.printing > *:not(#vocab-print) { display: none !important; }
+  body.printing { background: #fff; color: #000; }
+  body.printing #vocab-print { display: block; font-size: 10.5pt; }
+  #vocab-print h1 { font-size: 15pt; margin: 0 0 8pt; }
+  .vp-cols { column-count: 2; column-gap: 18pt; }
+  .vp-row { display: flex; gap: 8pt; break-inside: avoid; padding: 2.5pt 0; border-bottom: .5pt solid #bbb; }
+  .vp-code { font-family: monospace; font-weight: 700; flex: 0 0 9.5em; } /* fits K, N, W, AA–AK */
+  .vp-blank { flex: 1; border-bottom: .5pt dotted #777; min-height: 1.1em; }
+  .vp-foot { margin-top: 10pt; font-size: 8pt; color: #555; }
+}

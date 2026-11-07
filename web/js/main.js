@@ -3,17 +3,17 @@
 // + fatigue in a lesson, warm-up after a break, progress dashboard (M5).
 import { t, fmtNum, fmtDate, setLang, lang, LANGUAGES } from './i18n.js';
 import { isPublic, otherSite } from './site.js';
-import { traceBegin, traceEnd, tr, traceAudio, audioMeta } from './trace.js';
+import { traceBegin, traceEnd, tr, traceAudio, audioMeta, setBeforeHide } from './trace.js';
 import { MorsePlayer } from './audio.js';
 import { TouchKeyboard } from './keyboard.js';
-import { normalizeKey, KOCH_ORDER } from './charset.js';
+import { normalizeKey, KOCH_ORDER, maxLevel } from './charset.js';
 import {
   Drill, charsForLevel, median, trendArrow, pickContrasts, discrimSequence,
   ADVANCE_WINDOW, ADVANCE_ACCURACY, NEW_MIN_N, NEW_ACCURACY,
 } from './drill.js';
 import {
   settings, progress, sync, stats, coachInfo, setCoachInfo, saveSettings, saveProgress, addLesson, onDataChange,
-  MODE_CHAR, MODE_COPY,
+  MODE_CHAR, MODE_COPY, MODE_HEAD,
 } from './storage.js';
 import { renderQuiz } from './quiz.js';
 import { renderPlan } from './plan.js';
@@ -21,12 +21,17 @@ import { renderDashboard } from './dashboard.js';
 import { renderStats, confusionsWith } from './stats.js';
 import {
   confirmGate, sessionLoad, warmupStats, fatigueSignal, WARMUP_S, SESSION_END_MIN, DAY_WARN_MIN, FATIGUE_TTR,
-  FatigueMonitor, fatigueRef, REWARM_PAUSE_MIN, REWARM_S, SESSION_BREAK_MIN,
+  FatigueMonitor, PaceWatch, fatigueRef, lessonPace, SLOW_DAY, REWARM_PAUSE_MIN, REWARM_S, SESSION_BREAK_MIN,
 } from './coach.js';
 import { startAuth, renderAccount, backgroundSync, session } from './account.js';
 import { deviceKind, DEVICE_MOBILE } from './api.js';
 import { initCopy } from './copylesson.js';
+import { initHead } from './headlesson.js';
+import { initEntry } from './entrytest.js';
 import { initDemo } from './demo.js';
+import { initBandLab } from './bandlab.js';
+import { initDemoBand } from './demoband.js';
+import { initVocab } from './vocabui.js';
 import * as WPM from '../vendor/morse-pro/morse-pro-wpm.js';
 
 const $ = (s) => document.querySelector(s);
@@ -49,7 +54,7 @@ player.settings = settings; // shared object (wpm, fwpm, freq, volume)
 // ================= navigation =================
 let view = 'home';
 const PUBLIC_VIEWS = ['login', 'register', 'reset', 'demo'];
-const TRAINING_VIEWS = ['home', 'intro', 'discrim', 'lesson', 'result', 'stats', 'quiz', 'copy', 'copyresult'];
+const TRAINING_VIEWS = ['home', 'intro', 'discrim', 'lesson', 'result', 'stats', 'quiz', 'copyhome', 'copy', 'copyresult', 'vocab', 'head', 'headresult', 'entry', 'entryresult'];
 // 0.8.6: user menu (icon top right)
 function closeUserMenu() {
   $('#user-menu').hidden = true;
@@ -65,6 +70,15 @@ document.addEventListener('click', (e) => { if (!e.target.closest('#user-menu'))
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUserMenu(); });
 $('#menu-logout').addEventListener('click', () => { closeUserMenu(); $('#acc-logout').click(); });
 
+// 0.9.7 (Z-08): new app version activated by the service worker → reload outside a lesson
+const UPDATE_SAFE_VIEWS = ['home', 'stats', 'copyhome', 'login', 'demo'];
+const updateReload = { pending: false, done: false };
+function reloadForUpdate() {
+  updateReload.done = true;
+  tr('swUpdate', view);
+  location.reload();
+}
+
 function show(name) {
   if (!session.user && !PUBLIC_VIEWS.includes(name)) name = 'login';
   if (session.user?.pw_change) name = 'pwchange'; // E3: new password first
@@ -74,24 +88,33 @@ function show(name) {
   $('.tabs [data-go="home"]').hidden = admin || out;
   for (const el of document.querySelectorAll('.training-only')) el.hidden = admin || out;
   for (const el of document.querySelectorAll('.public-only')) el.hidden = !out;
+  const coach = session.user?.role === 'trener'; // ZB lab (development) – coaches only
+  for (const el of document.querySelectorAll('.coach-only')) el.hidden = !coach;
+  if (name === 'band' && !coach) name = 'settings';
   $('.usermenu').hidden = out;
-  if (view === 'demo' && name !== 'demo') demo.stop();
+  if (view === 'demo' && name !== 'demo') { demo.stop(); demoBand.stop(); }
+  if (view === 'band' && name !== 'band') bandLab.stop();
+  if (view === 'vocab' && name !== 'vocab') vocab.stop();
   view = name;
+  if (updateReload.pending && !updateReload.done && UPDATE_SAFE_VIEWS.includes(name)) { reloadForUpdate(); return; }
   for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== `view-${name}`;
-  const training = name === 'lesson' || name === 'intro' || name === 'discrim' || name === 'copy';
-  $('#keyboard').hidden = name !== 'lesson' && name !== 'discrim' && name !== 'copy' && name !== 'demo';
+  const training = ['lesson', 'intro', 'discrim', 'copy', 'head', 'entry'].includes(name);
+  $('#keyboard').hidden = !['lesson', 'discrim', 'copy', 'demo', 'entry'].includes(name);
   player.keepAlive(training && document.visibilityState === 'visible'); // 0.8.5: BT output must not fall asleep
   $('.tabs').hidden = training || name === 'pwchange' || (!session.user && !['login', 'demo'].includes(name));
   $('#user-btn').hidden = name === 'pwchange';
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.go === name);
-  $('#user-btn').classList.toggle('active', name === 'settings' || name === 'account');
+  $('#user-btn').classList.toggle('active', name === 'settings' || name === 'account' || name === 'stats');
   closeUserMenu();
   if (name === 'home') renderHome();
   if (name === 'settings') { renderSteppers(); refreshDiag(); }
   if (name === 'account') renderAccount();
   if (name === 'stats') { drawStats(); backgroundSync(); }
   if (name === 'quiz') openQuiz();
-  if (name === 'demo') demo.render();
+  if (name === 'demo') { demo.render(); demoBand.render(); }
+  if (name === 'band') bandLab.render();
+  if (name === 'vocab') vocab.render();
+  if (name === 'copyhome') renderCopyCard();
   window.scrollTo(0, 0);
 }
 document.addEventListener('click', (e) => {
@@ -127,10 +150,15 @@ const demo = initDemo({
     inputHandler = input; repeatHandler = repeat; pauseHandler = pause;
   },
 });
+const bandLab = initBandLab({ player, ensureAudio }); // ZB listening lab (development, coaches)
+const demoBand = initDemoBand({ player, ensureAudio }); // 0.9.9: band sample in the demo
+const vocab = initVocab({ sync, show: (n) => show(n), player, ensureAudio }); // 0.10.0: abbreviations, Q codes, prefixes
 
 document.addEventListener('keydown', (e) => {
   if (view === 'copy') { if (copyCtl.onKey(e)) e.preventDefault(); return; }
-  if (view !== 'lesson' && view !== 'intro' && view !== 'discrim' && view !== 'demo') return;
+  if (view === 'head') { if (headCtl.onKey(e)) e.preventDefault(); return; }
+  if (view === 'vocab') { if (vocab.onKey(e)) e.preventDefault(); return; }
+  if (view !== 'lesson' && view !== 'intro' && view !== 'discrim' && view !== 'demo' && view !== 'entry') return;
   if (e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
   if (e.key === ' ') { e.preventDefault(); repeatHandler?.(); return; }
   if (view === 'intro') { if (e.key === 'Enter') { e.preventDefault(); intro.next?.(); } return; }
@@ -145,11 +173,15 @@ function currentLoad() { return sessionLoad(progress.history, Date.now(), localM
 const fmtMin = (m) => fmtNum(Math.round(m));
 const pct = (x) => `${Math.round(x * 100)} %`;
 
-function newestChar() { return charsForLevel(progress.level).at(-1); }
+// 0.9.6: the set ends with the main programme (44) unless the optional extension is on; the stored level is kept
+const maxLvl = () => maxLevel(settings.extraChars === 1);
+const lvl = () => Math.min(progress.level, maxLvl());
+
+function newestChar() { return charsForLevel(lvl()).at(-1); }
 
 function renderHome() {
-  const chars = charsForLevel(progress.level);
-  $('#level-count').textContent = t('home.levelCount', { n: chars.length, of: KOCH_ORDER.length });
+  const chars = charsForLevel(lvl());
+  $('#level-count').textContent = t('home.levelCount', { n: chars.length, of: maxLvl() });
   const box = $('#level-chars');
   box.textContent = '';
   for (const c of chars) {
@@ -158,10 +190,12 @@ function renderHome() {
     if (c === newestChar()) s.className = 'newest';
     box.append(s);
   }
-  const next = KOCH_ORDER[chars.length];
+  const next = chars.length < maxLvl() ? KOCH_ORDER[chars.length] : null;
   $('#level-next').textContent = next
     ? t('home.nextChar', { ch: next, acc: Math.round(ADVANCE_ACCURACY * 100), n: ADVANCE_WINDOW })
-    : t('home.allChars');
+    : (settings.extraChars === 1 ? t('home.allChars') : t('home.allCore', { n: maxLvl() }));
+  // Z-14: entry test offered on Home to returning/active operators (questionnaire) until they get past the start
+  $('#entry-card').hidden = !(coachInfo.data?.prefs?.entryTest && progress.level <= 2);
   $('#lesson-info').textContent = t('home.lessonInfo', { min: settings.lessonMin, wpm: settings.wpm, fwpm: settings.fwpm, freq: settings.freq });
   // M6: pace change by the coach (stays visible until the next lesson)
   const sn = coachInfo.data?.speedNotice;
@@ -189,7 +223,6 @@ function renderHome() {
   }
 
   renderPlan($('#plan-root'), coachInfo.data, { onQuiz: () => show('quiz') });
-  renderCopyCard();
 
   const tb = $('#history');
   tb.textContent = '';
@@ -198,7 +231,7 @@ function renderHome() {
   for (const h of last) {
     const row = document.createElement('tr');
     const d = fmtDate(h.at, { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
-    const what = h.mode === MODE_COPY ? t('home.histCopy') : t('home.histChars', { n: h.level });
+    const what = h.mode === MODE_COPY ? t('home.histCopy') : h.mode === MODE_HEAD ? t('home.histHead') : t('home.histChars', { n: h.level });
     for (const txt of [d, what, pct(h.acc), h.ttr ? `${h.ttr} ms` : '–']) {
       const td = document.createElement('td'); td.textContent = txt; row.append(td);
     }
@@ -209,21 +242,58 @@ function renderHome() {
 // ================= COPY BEHIND (M7) =================
 const copyCtl = initCopy({
   player, kbd, show, settings, progress, coachInfo, addLesson, ensureAudio, keepAwake, deviceKind, currentLoad,
-  fallbackChars: () => charsForLevel(progress.level),
+  fallbackChars: () => charsForLevel(lvl()), level: lvl,
+  vocabForms: () => vocab.copyForms(), // 0.10.9: abbreviations in copy behind only from the vocabulary trainer
 });
-$('#btn-copy').addEventListener('click', () => copyCtl.start());
+$('#btn-copy').addEventListener('click', () => withDndTip(() => copyCtl.start()));
 $('#btn-copy-again').addEventListener('click', () => copyCtl.start());
 
+// ================= HEAD COPY (U6, 0.10.14) =================
+const headCtl = initHead({
+  player, show, settings, coachInfo, addLesson, ensureAudio, keepAwake, deviceKind, currentLoad,
+  fallbackChars: () => charsForLevel(lvl()), level: lvl,
+});
+$('#btn-head').addEventListener('click', () => withDndTip(() => headCtl.start()));
+$('#btn-head-again').addEventListener('click', () => headCtl.start());
+
+// ================= ENTRY TEST (Z-14, 0.10.16) =================
+const entryCtl = initEntry({
+  player, kbd, show, settings, progress, addLesson, saveProgress, ensureAudio, keepAwake, deviceKind, level: lvl,
+  setHandlers: ({ input = null, repeat = null, pause = null }) => { inputHandler = input; repeatHandler = repeat; pauseHandler = pause; },
+});
+for (const b of document.querySelectorAll('.btn-entry')) b.addEventListener('click', () => withDndTip(() => entryCtl.start()));
+
+const COPY_EARLY_MIN = 10; // = server/coach.py COPY_EARLY_MIN (test): trial copy behind from this many mastered characters
+
+/** 0.10.10: own view of copy behind (top bar) – the lesson card, or when locked what unlocks it. */
 function renderCopyCard() {
   const cp = coachInfo.data?.copy;
   $('#copy-card').hidden = !cp?.available;
-  if (!cp?.available) return;
-  $('#copy-step').textContent = t('home.copyStep', { ulevel: cp.ulevel || 3, step: cp.step, of: cp.of });
+  $('#copy-locked').hidden = !!cp?.available;
+  if (!cp?.available) {
+    $('#copy-locked-text').textContent = t('copy.locked', { n: COPY_EARLY_MIN, m: cp?.chars?.length ?? 0 });
+    renderHeadCard();
+    return;
+  }
+  $('#copy-step').textContent = cp.early ? t('home.copyEarly', { step: cp.step }) // Z-16: trial before U3
+    : t('home.copyStep', { ulevel: cp.ulevel || 3, step: cp.step, of: cp.of });
   const speed = cp.wpm ? `${cp.wpm}/${cp.wpm}` : `${settings.wpm}/${settings.fwpm}`;
   $('#copy-desc').textContent = t('home.copyDesc', { name: cp.name, gap: cp.gap, speed })
     + (cp.markLag > 1 ? ` ${t('home.copyWordLag')}` : '')
     + (deviceKind() === DEVICE_MOBILE ? ` ${t('home.copyMobile')}` : '');
   $('#copy-note').textContent = [cp.change?.text, cp.change?.why, cp.next].filter(Boolean).join(' ');
+  renderHeadCard();
+}
+
+/** 0.10.14: head copy card under copy behind – trial from U4, the full ladder from U5. */
+function renderHeadCard() {
+  const hd = coachInfo.data?.head;
+  $('#head-card').hidden = !hd?.available;
+  if (!hd?.available) return;
+  $('#head-step').textContent = hd.early ? t('home.headEarly') : t('home.headStep', { step: hd.step, of: hd.of });
+  $('#head-desc').textContent = t('home.headDesc', { name: hd.name })
+    + (deviceKind() === DEVICE_MOBILE ? ` ${t('home.headMobile')}` : '');
+  $('#head-note').textContent = [hd.change?.text, hd.change?.why, hd.next].filter(Boolean).join(' ');
 }
 
 // ================= QUESTIONNAIRE (M4) =================
@@ -243,12 +313,39 @@ function openQuiz() {
   });
 }
 
-$('#btn-start').addEventListener('click', startTraining);
+// 0.9.7 (Z-07): a new account (no lesson, no questionnaire) gets the questionnaire offered before the first lesson –
+// the card on Home alone was overlooked. Once a lesson exists it is never offered again (nothing stored).
+let quizOfferSkipped = false;
+const quizOfferDue = () => !quizOfferSkipped && !progress.history.length && coachInfo.data && !coachInfo.data.archetype;
+$('#btn-start').addEventListener('click', () => {
+  if (quizOfferDue()) { tr('quizOffer'); $('#quiz-offer').hidden = false; $('#quiz-offer-fill').focus(); return; }
+  withDndTip(startTraining);
+});
+$('#quiz-offer-fill').addEventListener('click', () => { $('#quiz-offer').hidden = true; show('quiz'); });
+$('#quiz-offer-skip').addEventListener('click', () => { $('#quiz-offer').hidden = true; quizOfferSkipped = true; withDndTip(startTraining); });
+// 0.9.7 (Z-02): once per phone – a notification interrupts the sound and the focus → tip to turn on Do not disturb.
+// Remembered in this browser only (a per-device thing); the callback runs from the button click (audio unlock still works).
+const DND_KEY = 'morse-dnd-tip';
+let dndNext = null;
+function withDndTip(fn) {
+  let seen = true;
+  try { seen = deviceKind() !== DEVICE_MOBILE || localStorage.getItem(DND_KEY) === '1'; } catch (e) { /* storage blocked */ }
+  if (seen) { fn(); return; }
+  dndNext = fn;
+  tr('dndTip');
+  $('#dnd-tip').hidden = false;
+  $('#dnd-tip-ok').focus();
+}
+$('#dnd-tip-ok').addEventListener('click', () => {
+  try { localStorage.setItem(DND_KEY, '1'); } catch (e) { /* storage blocked */ }
+  $('#dnd-tip').hidden = true;
+  const fn = dndNext; dndNext = null; fn?.();
+});
 $('#btn-again').addEventListener('click', startTraining);
 
 async function startTraining() {
   if (!(await ensureAudio())) { alert(t('audio.failed')); return; }
-  const chars = charsForLevel(progress.level);
+  const chars = charsForLevel(lvl());
   kbd.setMode(MODE_CHAR);
   kbd.setActive(chars);
   await keepAwake(true);
@@ -256,7 +353,7 @@ async function startTraining() {
   const fresh = chars.filter((c) => !progress.introduced.includes(c));
   traceAudio(player.ctx);
   traceBegin(MODE_CHAR, {
-    level: progress.level, chars: chars.join(''), fresh: fresh.join(''), device: deviceKind(),
+    level: lvl(), chars: chars.join(''), fresh: fresh.join(''), device: deviceKind(),
     standalone: matchMedia('(display-mode: standalone)').matches, public: isPublic(),
     set: { wpm: settings.wpm, fwpm: settings.fwpm, freq: settings.freq, vol: settings.volume, min: settings.lessonMin },
     load: currentLoad(), audio: audioMeta(player), ulevel: coachInfo.data?.ulevel ?? null, ua: navigator.userAgent.slice(0, 200),
@@ -442,8 +539,12 @@ function endRewarm() {
 
 function trackFatigue() {
   const tl = L.drill.trials.at(-1);
-  const r = L.fat.add({ ch: tl.ch, ok: tl.ok, ttr: tl.ttr }, activeS(), !inWarmup() && !L.flu);
+  const count = !inWarmup() && !L.flu;
+  const r = L.fat.add({ ch: tl.ch, ok: tl.ok, ttr: tl.ttr }, activeS(), count);
   if (r.propose && !L.fatPending) L.fatPending = r;
+  // Z-17 shadow mode (owner 2026-11-07): the long-term detector only writes to the debug trace, it proposes nothing
+  const pw = L.paceWatch.add({ ch: tl.ch, ok: tl.ok, ttr: tl.ttr }, activeS(), count);
+  if (pw.propose) tr('pw', [Math.round(activeS()), Math.round(pw.med * 1000) || null, pw.lapses]);
 }
 
 function proposeFatigue() {
@@ -504,7 +605,7 @@ function startLesson(chars) {
   const fatKey = chars.join('');
   const fat = new FatigueMonitor(sessionFat.key === fatKey ? sessionFat.base : null,
     { ref: fatigueRef(L.prior), newChar: newestChar() });
-  Object.assign(L, { fat, fatKey, fatEvents: [], fatPending: null, pauses: [], rewarmUntil: 0, flu: null });
+  Object.assign(L, { fat, fatKey, fatEvents: [], fatPending: null, paceWatch: new PaceWatch(fatigueRef(L.prior)), pauses: [], rewarmUntil: 0, flu: null });
   if (L.warm) L.drill.setExclude(L.warm.fresh);
   tr('lesson', { warm: !!L.warm, fatBase: !!fat.base });
   $('#ls-phase').textContent = t('lesson.warmup');
@@ -651,7 +752,7 @@ async function resume() {
   $('#ls-char').className = 'big-char';
   $('#ls-status').textContent = ps >= 5 ? t('lesson.getReady') : '';
   if (ps >= 5) L.pauses.push([activeS(), ps]);
-  if (ps >= 5) L.fat.reset(); // after a pause fatigue is measured anew
+  if (ps >= 5) { L.fat.reset(); L.paceWatch.reset(); } // after a pause fatigue is measured anew
   if (long) {
     // warm-up after a pause: briefly known characters only, counted neither for fatigue nor as the session warm-up
     L.rewarmUntil = L.activeMs + REWARM_S * 1000;
@@ -701,7 +802,8 @@ function fatigueNote(trials) {
 
 const ARROWS = { up: '↑', down: '↓', flat: '→' };
 
-function finishLesson() {
+/** aborted (0.9.7, Z-06): the page is being closed/reloaded – save what was done, never advance. */
+function finishLesson(aborted = false) {
   L.running = false;
   L.paused = false;
   clearInterval(L.tick); clearTimeout(L.timeout); clearTimeout(L.pending);
@@ -726,11 +828,11 @@ function finishLesson() {
   if (sum.trials === 0) { traceEnd(null, { empty: true }); show('home'); return; }
   const warmup = L.warm ? warmupStats(L.drill.trials.slice(0, L.warm.n ?? L.drill.trials.length), L.warm.gapH) : null;
 
-  const levelBefore = progress.level;
+  const levelBefore = lvl();
   const a = sum.advance;
   // loop b: advancing in a lesson must hold in a different session than the one where the newest character was added (consolidation by sleep)
   const gate = a.ok ? confirmGate([...progress.history, { at: new Date().toISOString(), level: levelBefore }], levelBefore, Date.now()) : null;
-  const adv = !a.ok ? a.reason : (progress.level >= KOCH_ORDER.length ? 'full' : (gate.ok ? 'ok' : 'confirm'));
+  const adv = aborted ? 'aborted' : !a.ok ? a.reason : (levelBefore >= maxLvl() ? 'full' : (gate.ok ? 'ok' : 'confirm'));
   const saved = addLesson({
     at: new Date().toISOString(), device: deviceKind(), level: levelBefore, durS: Math.round(L.activeMs / 1000),
     trials: sum.trials, correct: sum.correct, acc: sum.accuracy, ttr: sum.medianTtr,
@@ -742,16 +844,25 @@ function finishLesson() {
       ...(L.pauses.length ? { pauses: L.pauses } : {}),
       ...(sum.gapLog.length ? { gapLog: sum.gapLog.slice(-30) } : {}),
       ...(flu ? { fluency: flu } : {}),
+      ...(aborted ? { aborted: true } : {}),
     },
   });
+  // 0.9.8 (Z-17): slow day – the whole lesson against the long-term reaction (fatigue present from the start is otherwise unseen)
+  const pace = lessonPace(L.drill.trials.slice(L.warm?.n ?? 0), fatigueRef(L.prior)); // after the warm-up, newest char by its own ref
+  // 0.10.11: written before traceEnd – after it tr() is a no-op (pace and pwEnd were lost in 0.9.8–0.10.10)
+  if (pace !== null) tr('pace', Math.round(pace * 1000));
+  const pwMax = L.paceWatch?.max;
+  if (pwMax && pwMax.med !== null) tr('pwEnd', [L.paceWatch.events.length, Math.round(pwMax.med * 1000), pwMax.lapses]);
   traceEnd(saved.id, { trials: sum.trials, acc: sum.accuracy, ttr: sum.medianTtr, adv, activeS: Math.round(L.activeMs / 1000) });
   let verdict;
   const rec = a.recent === null ? null : Math.round(a.recent * 100);
   const nc = a.newChar || '';
-  if (adv === 'confirm') {
+  if (aborted) {
+    verdict = t('verdict.aborted');
+  } else if (adv === 'confirm') {
     verdict = t('verdict.confirm', { pct: rec, ch: nc, h: Math.max(0.5, gate.waitH) });
-  } else if (a.ok && progress.level < KOCH_ORDER.length) {
-    progress.level++;
+  } else if (a.ok && levelBefore < maxLvl()) {
+    progress.level = levelBefore + 1;
     verdict = t('verdict.advance', { pct: rec, n: ADVANCE_WINDOW, ch: KOCH_ORDER[progress.level - 1] });
   } else if (a.ok) {
     verdict = t('verdict.full', { pct: rec });
@@ -778,6 +889,7 @@ function finishLesson() {
   const notes = [verdict];
   if (fat) notes.push(fat);
   if (sum.gapLog.length) notes.push(t('result.gapEase'));
+  if (!aborted && pace !== null && pace >= SLOW_DAY) notes.push(t('result.slowDay', { pct: Math.round((pace - 1) * 100) }));
   if (flu) {
     notes.push(flu.ttr ? t('result.fluencyTtr', { pct: Math.round(flu.acc * 100), wpm: flu.wpm, fwpm: flu.fwpm, ttr: flu.ttr })
       : t('result.fluency', { pct: Math.round(flu.acc * 100), wpm: flu.wpm, fwpm: flu.fwpm }));
@@ -826,9 +938,10 @@ function finishLesson() {
 function drawStats() {
   renderDashboard($('#dash-root'), coachInfo.data?.dashboard || null);
   renderStats($('#stats-root'), {
-    stats, level: progress.level,
+    stats, level: lvl(), of: maxLvl(),
     onPlay: async (ch) => { if (await ensureAudio()) player.play(ch); },
   });
+  vocab.renderStats($('#vocab-stats')); // 0.10.0
 }
 
 // ================= SETTINGS =================
@@ -845,11 +958,17 @@ function renderSteppers() {
   }
   $('#wpm-warn').hidden = settings.wpm >= 15;
   $('#auto-speed').checked = settings.autoSpeed !== 0;
+  $('#extra-chars').checked = settings.extraChars === 1;
   for (const sel of document.querySelectorAll('.lang-select')) sel.value = lang;
 }
 $('#auto-speed').addEventListener('change', (e) => {
   settings.autoSpeed = e.target.checked ? 1 : 0;
   saveSettings();
+});
+$('#extra-chars').addEventListener('change', (e) => { // 0.9.6: optional extension (rare punctuation)
+  settings.extraChars = e.target.checked ? 1 : 0;
+  saveSettings();
+  renderHome();
 });
 
 function initSteppers() {
@@ -941,12 +1060,23 @@ initLangSelects();
   if (o) { a.href = o.url; a.textContent = `${o.label} (${o.name})`; } else a.hidden = true;
   if (isPublic()) document.title = t('app.titlePublic');
 }
-if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  // 0.9.7 (Z-08): app files come from the cache → a new version takes over in the background; reload once it is active,
+  // but never in the middle of a lesson (then at the next return to Home). First install = no previous controller.
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || updateReload.done) return;
+    updateReload.pending = true;
+    if (UPDATE_SAFE_VIEWS.includes(view)) reloadForUpdate();
+  });
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
 
 // Data from the server (another device) – redraw, but never in the middle of a lesson.
 onDataChange(() => {
-  if (['home', 'settings', 'account', 'stats', 'result', 'copyresult'].includes(view)) applyAccountLang();
+  if (['home', 'settings', 'account', 'stats', 'result', 'copyhome', 'copyresult', 'headresult'].includes(view)) applyAccountLang();
   if (view === 'home') renderHome();
+  else if (view === 'copyhome') renderCopyCard();
   else if (view === 'settings') renderSteppers();
   else if (view === 'account') renderAccount();
   else if (view === 'stats') drawStats();
@@ -955,9 +1085,18 @@ onDataChange(() => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && ['home', 'settings', 'account', 'result', 'stats', 'copyresult'].includes(view)) backgroundSync();
   if (document.visibilityState === 'hidden' && view === 'copy') copyCtl.hold(); // the stream must not run into the void
-  if (document.visibilityState === 'hidden' && view === 'demo') demo.stop();
-  player.keepAlive(document.visibilityState === 'visible' && ['lesson', 'intro', 'discrim', 'copy'].includes(view));
+  if (document.visibilityState === 'hidden' && view === 'head') headCtl.hold();
+  if (document.visibilityState === 'hidden' && view === 'entry') entryCtl.hold();
+  if (document.visibilityState === 'hidden' && view === 'demo') { demo.stop(); demoBand.stop(); }
+  if (document.visibilityState === 'hidden' && view === 'band') bandLab.stop();
+  player.keepAlive(document.visibilityState === 'visible' && ['lesson', 'intro', 'discrim', 'copy', 'head', 'entry'].includes(view));
 });
-window.addEventListener('online', () => backgroundSync());
+window.addEventListener('online', () => { backgroundSync(); vocab.flush(); });
+// 0.9.7 (Z-06): closing/reloading the page in the middle of a lesson – keep it as an aborted lesson (sent with the next sync)
+setBeforeHide(() => {
+  if (L.running) finishLesson(true);
+  else if (copyCtl.running) copyCtl.abort();
+  else if (headCtl.running) headCtl.abort();
+});
 
 startAuth(show).then((ok) => { if (ok) { applyAccountLang(); show('home'); } });

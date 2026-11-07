@@ -18,12 +18,15 @@
       <button type="button" data-go="login" class="public-only" data-i18n="nav.login">Log in</button>
       <button type="button" data-go="demo" class="public-only" data-i18n="nav.demo">Try it</button>
       <button type="button" data-go="home" data-i18n="nav.home">Home</button>
-      <button type="button" data-go="stats" class="training-only" data-i18n="nav.stats">Progress</button>
+      <!-- 0.10.10 (Martin): copy behind and vocabulary as own views next to Home; Progress in the user menu -->
+      <button type="button" data-go="copyhome" class="training-only" data-i18n="nav.copy">Copy</button>
+      <button type="button" data-go="vocab" class="training-only" data-i18n="nav.vocab">Abbrev.</button>
       <div class="usermenu">
         <button type="button" id="user-btn" class="avatar" aria-haspopup="true" aria-expanded="false"
-          aria-controls="user-menu" title="Account and settings" data-i18n-attr="title:nav.accountSettings"><span id="user-initial">?</span></button>
+          aria-controls="user-menu" title="Account and settings" data-i18n-attr="title:nav.accountSettings"><span id="user-initial">?</span><sub id="user-online" class="online" hidden></sub></button>
         <div id="user-menu" class="menu" hidden>
           <p class="menu-nick" id="tab-account" data-i18n="nav.account">Account</p>
+          <button type="button" data-go="stats" class="training-only" data-i18n="nav.stats">Progress</button>
           <button type="button" data-go="settings" data-i18n="nav.settings">Settings</button>
           <button type="button" data-go="account" data-i18n="nav.accountDevices">Account and devices</button>
           <a href="/o-aplikaci.html" data-i18n="nav.about">About</a>
@@ -66,6 +69,20 @@
           watches for fatigue, and your progress is saved. Accounts are created by invitation only.</p>
         <button type="button" id="demo-again" class="big" data-i18n="demo.again">↻ Try again</button>
         <button type="button" data-go="login" data-i18n="login.title">Log in</button>
+      </div>
+      <!-- 0.9.9: "this is how the band sounds" – the goal of the training, for newcomers -->
+      <div id="demo-band" class="card">
+        <h2 data-i18n="demoBand.title">This is how the band sounds</h2>
+        <p data-i18n="demoBand.text">The goal of the training: understand a real contact even in noise and interference.</p>
+        <div id="demo-band-presets" class="band-presets" role="group" aria-label="Band" data-i18n-attr="aria-label:demoBand.situation"></div>
+        <p id="demo-band-hint" class="hint"></p>
+        <div class="demo-band-row"><span class="muted" data-i18n="demoBand.speed">Speed</span>
+          <span id="demo-band-speeds" class="band-presets" role="group"></span></div>
+        <p id="demo-band-audio" class="form-error" hidden data-i18n="demo.noAudio">Sound could not be started – try again.</p>
+        <button type="button" id="demo-band-play" class="big" data-i18n="demoBand.play">▶ Play a contact</button>
+        <button type="button" id="demo-band-stop" hidden data-i18n="band.stop">■ Stop</button>
+        <p id="demo-band-text" class="band-text demo-band-text" aria-live="off"></p>
+        <p id="demo-band-goal" class="hint" hidden data-i18n="demoBand.goal">From two characters to this.</p>
       </div>
     </section>
 
@@ -117,6 +134,7 @@
         <p class="hint" data-i18n="register.privacy">We store only the nickname, age group, settings and lesson results. No e-mail,
           no health data. You can download or delete your data at any time in the Account tab.</p>
         <p class="form-error" aria-live="polite"></p>
+        <button type="button" id="reg-retry" hidden data-i18n="register.retry">↻ Try again</button>
         <button type="submit" class="big" data-i18n="register.submit">Create account</button>
       </form>
     </section>
@@ -166,11 +184,10 @@
         <p id="speed-note" class="hint center" hidden></p>
         <p id="load-info" class="hint center" hidden></p>
       </div>
-      <div class="card" id="copy-card" hidden>
-        <h2><span data-i18n="home.copyTitle">Copy behind</span> <span id="copy-step" class="muted"></span></h2>
-        <p id="copy-desc" class="hint"></p>
-        <button type="button" id="btn-copy" class="big" data-i18n="home.copyStart">▶ Copy-behind lesson</button>
-        <p id="copy-note" class="hint center"></p>
+      <div class="card" id="entry-card" hidden>
+        <h2 data-i18n="entry.title">Entry test – I already know CW</h2>
+        <p class="hint" data-i18n="entry.cardText">Every character once again in random order, answer on the keyboard. The test suggests how many characters to start with, so you do not begin with K M.</p>
+        <button type="button" class="big btn-entry" data-i18n="entry.start">▶ Entry test</button>
       </div>
       <div class="card" id="plan-card">
         <h2 data-i18n="home.plan">Personal plan</h2>
@@ -180,6 +197,26 @@
         <h2 data-i18n="home.history">Recent lessons</h2>
         <p id="history-empty" class="hint" data-i18n="home.historyEmpty">No lesson yet.</p>
         <table class="history"><tbody id="history"></tbody></table>
+      </div>
+    </section>
+
+    <!-- ===== COPY BEHIND – own view from the top bar (0.10.10) ===== -->
+    <section id="view-copyhome" class="view" hidden>
+      <div class="card" id="copy-card" hidden>
+        <h2><span data-i18n="home.copyTitle">Copy behind</span> <span id="copy-step" class="muted"></span></h2>
+        <p id="copy-desc" class="hint"></p>
+        <button type="button" id="btn-copy" class="big" data-i18n="home.copyStart">▶ Copy-behind lesson</button>
+        <p id="copy-note" class="hint center"></p>
+      </div>
+      <div class="card" id="copy-locked" hidden>
+        <h2 data-i18n="home.copyTitle">Copy behind</h2>
+        <p id="copy-locked-text"></p>
+      </div>
+      <div class="card" id="head-card" hidden>
+        <h2><span data-i18n="home.headTitle">Head copy</span> <span id="head-step" class="muted"></span></h2>
+        <p id="head-desc" class="hint"></p>
+        <button type="button" id="btn-head" class="big" data-i18n="home.headStart">▶ Head-copy lesson</button>
+        <p id="head-note" class="hint center"></p>
       </div>
     </section>
 
@@ -222,6 +259,7 @@
     <section id="view-stats" class="view" hidden>
       <div id="dash-root"></div>
       <div id="stats-root"></div>
+      <div id="vocab-stats" class="card"></div>
     </section>
 
     <!-- ===== LESSON ===== -->
@@ -296,6 +334,85 @@
       </div>
     </section>
 
+    <!-- ===== ENTRY TEST (Z-14, 0.10.16) ===== -->
+    <section id="view-entry" class="view" hidden>
+      <div class="lesson-bar">
+        <span id="en-count"></span>
+        <div class="progress"><div id="en-progress"></div></div>
+      </div>
+      <div class="card center">
+        <h2 data-i18n="entry.title">Entry test – I already know CW</h2>
+        <p class="hint" data-i18n="entry.howTo">Type every character you hear. No correction during the test – if you do not know, wait (6 s).</p>
+        <p id="en-speed" class="hint"></p>
+        <button type="button" id="en-pause" data-i18n="copy.pause">⏸ Pause</button>
+      </div>
+      <div id="en-pause-overlay" class="overlay" hidden>
+        <div class="card center">
+          <h2 data-i18n="pause.title">Pause</h2>
+          <button type="button" id="en-resume" class="big" data-i18n="pause.resume">▶ Continue</button>
+          <button type="button" id="en-cancel" data-i18n="entry.cancel">End the test (nothing is stored)</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-entryresult" class="view" hidden>
+      <div class="card">
+        <h2 data-i18n="entry.resultTitle">Entry test result</h2>
+        <div class="kpis">
+          <div><b id="er-known"></b><span data-i18n="entry.known">characters known</span></div>
+          <div><b id="er-level"></b><span data-i18n="entry.level">suggested start (characters)</span></div>
+        </div>
+        <p id="er-text" class="verdict"></p>
+        <p id="er-unsure" class="hint"></p>
+        <button type="button" id="er-apply" class="big"></button>
+        <button type="button" id="er-same" data-go="home"></button>
+      </div>
+    </section>
+
+    <!-- ===== HEAD COPY (U6, 0.10.14) ===== -->
+    <section id="view-head" class="view" hidden>
+      <div class="lesson-bar">
+        <span id="hd-time">0:00</span>
+        <div class="progress"><div id="hd-progress"></div></div>
+        <span id="hd-acc">–</span>
+      </div>
+      <p id="hd-phase" class="hint center"></p>
+      <div class="head-stage">
+        <p id="hd-status" class="stage-status center" aria-live="polite"></p>
+        <form id="hd-form" class="head-form" hidden autocomplete="off"></form>
+        <p id="hd-reveal" class="head-reveal" hidden></p>
+        <div class="buttons center">
+          <button type="button" id="hd-check" class="big" hidden data-i18n="head.check">✓ Check</button>
+          <button type="button" id="hd-next" class="big" hidden data-i18n="head.next">▶ Next QSO</button>
+          <button type="button" id="hd-pause" data-i18n="copy.pause">⏸ Pause</button>
+        </div>
+      </div>
+      <div id="hd-pause-overlay" class="overlay" hidden>
+        <div class="card center">
+          <h2><span data-i18n="pause.title">Pause</span> <span id="hd-pause-time" class="muted">0:00</span></h2>
+          <p class="hint" data-i18n="head.pauseHint">An interrupted QSO is not scored. Lesson time is stopped.</p>
+          <button type="button" id="hd-resume" class="big" data-i18n="pause.resume">▶ Continue</button>
+          <button type="button" id="hd-finish" data-i18n="lesson.end">End lesson</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-headresult" class="view" hidden>
+      <div class="card">
+        <h2 data-i18n="headResult.title">Head-copy lesson result</h2>
+        <div class="kpis">
+          <div><b id="hr-acc"></b><span data-i18n="headResult.acc">correct answers</span></div>
+          <div><b id="hr-q"></b><span data-i18n="headResult.q">questions</span></div>
+          <div><b id="hr-rounds"></b><span data-i18n="headResult.rounds">QSOs</span></div>
+        </div>
+        <p id="hr-verdict" class="verdict"></p>
+        <p id="hr-detail" class="hint"></p>
+        <p id="hr-load" class="hint"></p>
+        <button type="button" id="btn-head-again" class="big" data-i18n="headResult.again">▶ Next head-copy lesson</button>
+        <button type="button" data-go="copyhome" data-i18n="copyResult.back">Back to copy behind</button>
+      </div>
+    </section>
+
     <section id="view-copyresult" class="view" hidden>
       <div class="card">
         <h2 data-i18n="copyResult.title">Copy-behind lesson result</h2>
@@ -308,7 +425,7 @@
         <p id="cr-detail" class="hint"></p>
         <p id="cr-load" class="hint" hidden></p>
         <button type="button" id="btn-copy-again" class="big" data-i18n="copyResult.again">▶ Next copy-behind lesson</button>
-        <button type="button" data-go="home" data-i18n="nav.home">Home</button>
+        <button type="button" data-go="copyhome" data-i18n="copyResult.back">Back to copy behind</button>
       </div>
     </section>
 
@@ -422,6 +539,7 @@
         <div class="stepper" data-key="volume" data-min="0.1" data-max="1" data-step="0.1" data-unit=" %" data-scale="100">
           <span class="st-label" data-i18n="settings.volume">Volume</span></div>
         <label class="check"><input type="checkbox" id="auto-speed"> <span data-i18n="settings.autoSpeed">Coach controls the pace</span> <small data-i18n="settings.autoSpeedHint">(spacing and speed by results)</small></label>
+        <label class="check"><input type="checkbox" id="extra-chars"> <span data-i18n="settings.extraChars">Learn the extension too</span> <small data-i18n="settings.extraCharsHint">(rare characters , ' : ) " @ ! – hardly used in amateur radio; added after the main programme)</small></label>
         <p class="hint" data-i18n="settings.speedHint">Spacing (Farnsworth) is shortened only after the full set: after 2 sessions ≥ 90 % with a stable reaction by one step, up to 20/20 WPM.
           With persistently low accuracy it gets longer. A manual change applies – the coach then waits for new data.</p>
         <p id="wpm-warn" class="hint warn" hidden data-i18n="settings.wpmWarn">Below 15 WPM characters stop sounding like a whole and tempt you to count dots. 20 WPM is recommended.</p>
@@ -437,6 +555,13 @@
         <p class="hint" data-i18n="settings.lessonHint">5–10 min recommended. After 30 min of continuous practice the coach suggests stopping, above 60 min a day it warns.</p>
         <div class="stepper" data-key="level" data-target="progress" data-min="2" data-max="51" data-step="1" data-unit-key="settings.unitChars">
           <span class="st-label"><span data-i18n="settings.level">Number of characters</span> <small data-i18n="settings.levelHint">(manual)</small></span></div>
+        <p class="hint" data-i18n="entry.settingsHint">Already know CW? The entry test finds out which characters you know.</p>
+        <button type="button" class="btn-entry" data-i18n="entry.start">▶ Entry test</button>
+      </div>
+      <div class="card coach-only" hidden>
+        <h2 data-i18n="band.title">Band sound (listening test)</h2>
+        <p class="hint" data-i18n="band.settingsHint">Development: noise, fading, interference and real keying – for coaches only.</p>
+        <button type="button" data-go="band" data-i18n="band.open">🎧 Open band sound</button>
       </div>
       <div class="card">
         <h2 data-i18n="settings.diag">Diagnostics</h2>
@@ -447,6 +572,109 @@
         <p class="hint"><a href="/o-aplikaci.html" data-i18n="settings.aboutLink">About, licences and acknowledgements</a></p>
       </div>
     </section>
+    <!-- ZB (development): band sound listening lab – coaches only -->
+    <section id="view-band" class="view" hidden>
+      <div class="card">
+        <h2 data-i18n="band.title">Band sound (listening test)</h2>
+        <p class="hint" data-i18n="band.intro">Pick a situation and listen.</p>
+        <div id="band-presets" class="band-presets"></div>
+        <p id="band-preset-hint" class="hint"></p>
+        <div class="buttons">
+          <button type="button" id="band-play" class="big" data-i18n="band.play">▶ Play another line</button>
+          <button type="button" id="band-stop" data-i18n="band.stop">■ Stop</button>
+          <button type="button" id="band-show" data-i18n="band.show">Show text</button>
+        </div>
+        <p id="band-status" class="hint" aria-live="polite"></p>
+        <p id="band-text" class="band-text" hidden></p>
+      </div>
+      <div class="card">
+        <details>
+          <summary data-i18n="band.adjust">Adjust parameters</summary>
+          <label class="band-slider"><span data-i18n="band.param.filterBw">Receiver filter</span> <select id="band-filter"></select></label>
+          <div id="band-sliders"></div>
+          <p class="hint" data-i18n="band.adjustHint">Changes apply to the next line.</p>
+        </details>
+        <button type="button" data-go="settings" data-i18n="nav.settings">Settings</button>
+      </div>
+    </section>
+    <!-- 0.10.0: vocabulary trainer -->
+    <section id="view-vocab" class="view" hidden>
+      <div id="vocab-menu">
+        <div class="card">
+          <h2 data-i18n="vocab.title">Abbreviations, Q codes and prefixes</h2>
+          <p data-i18n="vocab.choose">What do you want to train?</p>
+          <div id="vocab-lists"></div>
+          <p id="vocab-need" class="form-error" hidden data-i18n="vocab.needList">Pick at least one list.</p>
+          <button type="button" id="vocab-start" class="big" data-i18n="vocab.start">▶ Start training</button>
+        </div>
+        <div class="card">
+          <h2 data-i18n="vocab.overview">Overview</h2>
+          <div id="vocab-tabs" class="band-presets" role="group"></div>
+          <p id="vocab-ov-hint" class="hint"></p>
+          <div class="buttons">
+            <button type="button" id="vocab-pdf" data-i18n="vocab.pdf">⬇ List (PDF)</button>
+            <button type="button" id="vocab-pdf-blank" data-i18n="vocab.pdfBlank">⬇ Practice sheet (PDF)</button>
+          </div>
+          <p class="hint" data-i18n="vocab.pdfHint">Opens printing - choose Save as PDF.</p>
+          <table class="vocab-table">
+            <thead><tr><th data-i18n="vocab.colCode">Code</th><th data-i18n="vocab.colMeaning">Meaning</th><th data-i18n="vocab.colResult">Result</th></tr></thead>
+            <tbody id="vocab-table"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="vocab-run" class="card" hidden>
+        <p class="hint"><span id="vocab-q-list" class="muted"></span> · <span id="vocab-live"></span></p>
+        <p id="vocab-q-label"></p>
+        <div id="vocab-q-code" class="vocab-q-code" aria-live="polite"></div>
+        <div class="vocab-sound">
+          <label class="check"><input type="checkbox" id="vocab-sound"> <span data-i18n="vocab.sound">Also play in Morse</span></label>
+          <button type="button" id="vocab-replay" data-i18n="vocab.replay">↻ Play again</button>
+        </div>
+        <div id="vocab-opts" class="vocab-opts"></div>
+        <p id="vocab-feedback" class="hint" aria-live="polite"></p>
+        <div class="buttons">
+          <button type="button" id="vocab-next" class="big" hidden data-i18n="vocab.next">Next ▶</button>
+          <button type="button" id="vocab-finish" data-i18n="vocab.finish">Finish</button>
+        </div>
+      </div>
+      <div id="vocab-done" class="card" hidden>
+        <h2 data-i18n="vocab.doneTitle">Training finished</h2>
+        <div id="vocab-sum"></div>
+        <p id="vocab-offline" class="hint warn" hidden data-i18n="vocab.offline">The result will be saved when you are online.</p>
+        <button type="button" id="vocab-again" class="big" data-i18n="vocab.again">↻ Continue</button>
+        <button type="button" id="vocab-back" data-i18n="vocab.back">Back to the overview</button>
+      </div>
+    </section>
+    <!-- 0.9.7 (Z-07): the questionnaire is offered before the very first lesson -->
+    <div id="quiz-offer" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="quiz-offer-title">
+      <div class="card center">
+        <h2 id="quiz-offer-title" data-i18n="quizOffer.title">Before you start</h2>
+        <p data-i18n="quizOffer.text">A short questionnaire sets your plan.</p>
+        <button type="button" id="quiz-offer-fill" class="big" data-i18n="plan.quizButton">📝 Fill in the questionnaire</button>
+        <button type="button" id="quiz-offer-skip" data-i18n="quizOffer.skip">Skip and start</button>
+      </div>
+    </div>
+    <!-- 0.9.7 (Z-02): once per phone before the first lesson -->
+    <div id="dnd-tip" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="dnd-tip-title">
+      <div class="card">
+        <h2 id="dnd-tip-title" data-i18n="dndTip.title">Turn on Do not disturb</h2>
+        <p data-i18n="dndTip.text">A notification interrupts the sound.</p>
+        <ul class="hint">
+          <li data-i18n="dndTip.android">Android</li>
+          <li data-i18n="dndTip.samsung">Samsung</li>
+          <li data-i18n="dndTip.iphone">iPhone</li>
+        </ul>
+        <button type="button" id="dnd-tip-ok" class="big" data-i18n="dndTip.ok">Got it, start</button>
+      </div>
+    </div>
+    <div id="news-overlay" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="news-title">
+      <div class="card news-card">
+        <h2 id="news-title" data-i18n="news.title">What's new</h2>
+        <p class="hint" data-i18n="news.intro">New since your last visit:</p>
+        <div id="news-list"></div>
+        <button type="button" id="news-ok" class="big" data-i18n="news.ok">Got it</button>
+      </div>
+    </div>
   </main>
 
   <nav id="keyboard" aria-label="Keyboard" data-i18n-attr="aria-label:keyboard.label" hidden></nav>

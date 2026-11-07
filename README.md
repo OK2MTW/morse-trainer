@@ -104,7 +104,9 @@ Licence **EUPL-1.2** (viz [LICENSE](LICENSE)). Kdo upravenou verzi zpřístupní
 musí zpřístupnit i její zdrojový kód. Odkaz na zdroj je ve stránce „O aplikaci“.
 
 Používá [morse-pro](https://github.com/scp93ch/morse-pro) © Stephen C. Phillips (EUPL-1.2),
-Flask (BSD-3-Clause), Waitress (ZPL-2.1), argon2-cffi + argon2-cffi-bindings + cffi (MIT), pycparser (BSD-3-Clause),
-SQLite (public domain), nginx (BSD-2-Clause).
+Flask + Werkzeug, Jinja2, MarkupSafe, itsdangerous, click (BSD-3-Clause), blinker (MIT), Waitress (ZPL-2.1),
+argon2-cffi + argon2-cffi-bindings (MIT), cffi (MIT-0), pycparser (BSD-3-Clause), SQLite (public domain),
+Python (PSF-2.0), OpenSSL (Apache-2.0), nginx (BSD-2-Clause). Přesné verze nainstalovaných komponent a jejich licence
+jsou v [sbom.cdx.json](sbom.cdx.json) (CycloneDX, `python -m tools.sbom --write`).
 Metodika inspirována projekty [LCWO.net](https://lcwo.net/), [morsecode.world](https://morsecode.world/),
 CWops CW Academy a Long Island CW Club.

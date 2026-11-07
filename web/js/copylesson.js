@@ -5,8 +5,9 @@
 // The scoring logic is in copy.js (tested in Python).
 import { t, fmtNum } from './i18n.js';
 import { MODE_CHAR, MODE_COPY } from './storage.js';
-import { evaluate, lessonSummary, CopyFatigue, ROUND_ITEMS, ROUND_TAIL_MS } from './copy.js';
-import { makeItems } from './content.js';
+import { evaluate, ignoredOps, lessonSummary, CopyFatigue, ROUND_ITEMS, ROUND_TAIL_MS } from './copy.js';
+import { makeItems, qso, listFor, ABBR_MIN } from './content.js';
+import { BandSound, bandParams } from './band.js';
 import { normalizeKey } from './charset.js';
 import { DAY_WARN_MIN, SESSION_END_MIN } from './coach.js';
 import { traceBegin, traceEnd, tr, traceAudio, audioMeta } from './trace.js';
@@ -20,27 +21,37 @@ const MARK_AFTER_MS = 600;            // the mark of word k at the earliest 600 
 
 /**
  * deps: {player, kbd, show, settings, progress, coachInfo, addLesson, ensureAudio, keepAwake, deviceKind,
- *        currentLoad, fallbackChars()}
+ *        currentLoad, fallbackChars(), vocabForms() → mastered abbreviations and Q codes (0.10.9)}
  */
 export function initCopy(deps) {
   const { player, kbd, settings } = deps;
   const C = { running: false };
+  const band = new BandSound(player); // M9 (U5): steps with a band situation
   let R = null; // current line
+  const ABBR_CONTENT = new Set(['abbr', 'mix']); // content that takes abbreviations and Q codes
+  const vocabForms = async () => { try { return (await deps.vocabForms?.()) || []; } catch (e) { return []; } };
 
   function plan() {
     const cp = deps.coachInfo.data?.copy;
-    const chars = cp?.chars?.length ? cp.chars : deps.fallbackChars();
+    // 0.9.6: content only from characters the keyboard offers (extension switched off → no , ' : ) " @ !)
+    const typable = new Set(deps.fallbackChars());
+    const mastered = (cp?.chars || []).filter((c) => typable.has(c));
+    const chars = mastered.length ? mastered : deps.fallbackChars();
     return {
       step: cp?.step || 1, content: cp?.content || 'groups', gapX: cp?.gapX || 3, name: cp?.name || t('copy.groups'), chars,
-      wpm: cp?.wpm || null, markLag: cp?.markLag || 1,
+      wpm: cp?.wpm || null, markLag: cp?.markLag || 1, band: cp?.band || null,
     };
   }
 
   async function start() {
     if (!(await deps.ensureAudio())) { alert(t('audio.failed')); return; }
     await deps.keepAwake(true);
+    const p = plan();
+    // 0.10.9: abbreviations and Q codes only from items mastered in the vocabulary trainer
+    const abbrForms = ABBR_CONTENT.has(p.content) ? listFor(await vocabForms(), p.chars) : [];
+    if (ABBR_CONTENT.has(p.content)) p.abbrN = abbrForms.length;
     Object.assign(C, {
-      running: true, paused: false, plan: plan(), rounds: [], activeMs: 0, pauses: [], pauseAt: 0,
+      running: true, paused: false, plan: p, abbrForms, qsoBuf: null, rounds: [], activeMs: 0, pauses: [], pauseAt: 0,
       lessonMs: settings.lessonMin * 60000, tick: null, fat: new CopyFatigue(), fatEvents: [],
     });
     // M8: a step with a speed (U4) – character and gaps at the step speed; the settings for character lessons do not change
@@ -49,7 +60,7 @@ export function initCopy(deps) {
     player.settings = { ...settings, wpm: C.wpm, fwpm: C.fwpm };
     traceAudio(player.ctx);
     traceBegin(MODE_COPY, {
-      level: deps.progress.level, plan: C.plan, device: deps.deviceKind(), wpm: C.wpm, fwpm: C.fwpm,
+      level: deps.level(), plan: C.plan, device: deps.deviceKind(), wpm: C.wpm, fwpm: C.fwpm,
       set: { freq: settings.freq, vol: settings.volume, min: settings.lessonMin }, audio: audioMeta(player),
       ua: navigator.userAgent.slice(0, 200),
     });
@@ -57,7 +68,8 @@ export function initCopy(deps) {
     kbd.setActive(deps.fallbackChars()); // any known character can be typed (a confusion too), content only from mastered ones
     $('#cp-phase').textContent = t('copy.phase', { step: C.plan.step, name: C.plan.name, wpm: C.wpm, fwpm: C.fwpm })
       + (C.plan.gapX > 1 ? ` · ${t('copy.phaseGap', { x: num(C.plan.gapX) })}` : '')
-      + (C.plan.markLag > 1 ? ` · ${t('copy.phaseWordLag')}` : '');
+      + (C.plan.markLag > 1 ? ` · ${t('copy.phaseWordLag')}` : '')
+      + (C.plan.abbrN != null && C.plan.abbrN < ABBR_MIN ? ` · ${t('copy.phaseAbbr', { n: C.plan.abbrN })}` : '');
     $('#cp-acc').textContent = '–';
     $('#cp-pause-overlay').hidden = true;
     $('#cp-fatigue-overlay').hidden = true;
@@ -76,7 +88,14 @@ export function initCopy(deps) {
 
   // ---------- line ----------
   function startRound() {
-    const items = makeItems(C.plan.content, C.plan.chars, ROUND_ITEMS);
+    // M9: a QSO continues across lines (a buffer of words), other content is new for every line
+    let items;
+    if (C.plan.content === 'qso') {
+      if (!C.qsoBuf || C.qsoBuf.length < ROUND_ITEMS) C.qsoBuf = [...(C.qsoBuf || []), ...qso(C.plan.chars, ROUND_ITEMS * 6, Math.random)];
+      items = C.qsoBuf.splice(0, ROUND_ITEMS);
+    } else {
+      items = makeItems(C.plan.content, C.plan.chars, ROUND_ITEMS, Math.random, C.abbrForms);
+    }
     R = {
       items, typed: [], disp: [], marks: items.map(() => null), timers: [], done: false, review: false,
       startS: C.activeMs / 1000,
@@ -87,10 +106,12 @@ export function initCopy(deps) {
     $('#cp-status').textContent = t('copy.listen');
     drawTyped();
     drawMarks();
-    const st = player.playStream(items, { gapX: C.plan.gapX });
+    const st = C.plan.band
+      ? band.playStream(items, bandParams(C.plan.band, { wpm: C.wpm, freq: settings.freq || 600 }), { gapX: C.plan.gapX, fwpm: C.fwpm })
+      : player.playStream(items, { gapX: C.plan.gapX });
     Object.assign(R, { chars: st.chars, wordEnds: st.wordEnds, toneEnd: st.toneEnd, t0: st.start });
     // round: items and the end of each character in ms from the start of the line (typing "k" is timed from the same start)
-    tr('round', { items, wpm: player.settings.wpm, fwpm: player.settings.fwpm,
+    tr('round', { items, wpm: player.settings.wpm, fwpm: player.settings.fwpm, ...(C.plan.band ? { band: C.plan.band, freq: st.freq } : {}),
       ends: st.chars.map((c) => [c.ch, Math.round(c.end - st.start)]) });
     const now = performance.now();
     const lag = C.plan.markLag;
@@ -165,7 +186,7 @@ export function initCopy(deps) {
     C.activeMs += performance.now() - R.t0;
     const ev = evaluate(R.items, R.chars, R.typed);
     C.rounds.push({ items: R.items, ev });
-    tr('roundEnd', { acc: ev.sc.acc, words: ev.words.map((w) => (w ? 1 : 0)) });
+    tr('roundEnd', { acc: ev.sc.acc, words: ev.words.map((w) => (w ? 1 : 0)), ...(ev.sc.mask ? { mask: R.chars.map((c) => c.mask || '').join('.') } : {}) });
     R.marks = ev.words;
     drawMarks();
     drawReview(ev);
@@ -210,10 +231,17 @@ export function initCopy(deps) {
     const wordOf = R.chars.map((c) => c.w);
     // blocks by words: an operation belongs to the word of the sent character, an insertion to the word before it
     const blocks = R.items.map(() => ({ s: [], t: [] }));
+    // M9 part 2: characters masked by the band (and extras next to them) are grey and do not count
+    const ign = ignoredOps(ev.ops, R.chars.some((c) => c.mask) ? R.chars.map((c) => !!c.mask) : null);
     let w = 0;
-    for (const o of ev.ops) {
+    for (const [k, o] of ev.ops.entries()) {
       if (o.s !== null) w = wordOf[o.s];
       const b = blocks[w];
+      if (ign[k]) {
+        b.s.push(['mask', o.s !== null ? sent[o.s] : ' ']);
+        b.t.push(['mask', o.t !== null ? tch[o.t] : '_']);
+        continue;
+      }
       if (o.op === 'ok') { b.s.push(['ok', sent[o.s]]); b.t.push(['ok', tch[o.t]]); }
       if (o.op === 'sub') { b.s.push(['', sent[o.s]]); b.t.push(['sub', tch[o.t]]); }
       if (o.op === 'del') { b.s.push(['del', sent[o.s]]); b.t.push(['del', '_']); }
@@ -237,7 +265,7 @@ export function initCopy(deps) {
     });
     const lg = document.createElement('div');
     lg.className = 'legend';
-    lg.textContent = t('copy.legend');
+    lg.textContent = t('copy.legend') + (ev.sc.mask ? ` ${t('copy.legendMask', { n: ev.sc.mask })}` : '');
     box.append(lg);
     box.hidden = false;
   }
@@ -252,6 +280,7 @@ export function initCopy(deps) {
   function pause() {
     if (!C.running || C.paused) return;
     player.stop();
+    band.stop();
     if (R && !R.done) { // the interrupted line is dropped
       R.done = true;
       R.timers.forEach(clearTimeout);
@@ -276,7 +305,7 @@ export function initCopy(deps) {
   }
 
   // ---------- end of the lesson ----------
-  function finish() {
+  function finish(aborted = false) {
     clearInterval(C.tick);
     if (R && !R.done) pause();
     C.running = false;
@@ -284,23 +313,26 @@ export function initCopy(deps) {
     $('#cp-pause-overlay').hidden = true;
     $('#cp-fatigue-overlay').hidden = true;
     player.stop();
+    band.stop();
     player.settings = settings; // back to the shared settings (the step speed applied to this lesson only)
     kbd.setMode(MODE_CHAR);
     deps.keepAwake(false);
-    if (!C.rounds.length) { traceEnd(null, { empty: true }); deps.show('home'); return; }
+    if (!C.rounds.length) { traceEnd(null, { empty: true }); deps.show('copyhome'); return; }
     const s = lessonSummary(C.rounds);
     const p = C.plan;
     const saved = deps.addLesson({
-      at: new Date().toISOString(), device: deps.deviceKind(), mode: MODE_COPY, level: deps.progress.level,
+      at: new Date().toISOString(), device: deps.deviceKind(), mode: MODE_COPY, level: deps.level(),
       durS: Math.round(C.activeMs / 1000), trials: s.n, correct: s.ok, acc: s.acc ?? 0, ttr: null,
       wpm: C.wpm, fwpm: C.fwpm,
       detail: {
-        copy: { step: p.step, content: p.content, gapX: p.gapX, ...(p.wpm ? { wpm: p.wpm } : {}), markLag: p.markLag, ...s },
+        copy: { step: p.step, content: p.content, gapX: p.gapX, ...(p.wpm ? { wpm: p.wpm } : {}), markLag: p.markLag,
+          ...(p.band ? { band: p.band } : {}), ...s },
         ...(C.pauses.length ? { pauses: C.pauses } : {}),
         ...(C.fat.base || C.fatEvents.length ? { fatigue: { base: C.fat.base, events: C.fatEvents } } : {}),
+        ...(aborted ? { aborted: true } : {}),
       },
     });
-    traceEnd(saved.id, { n: s.n, ok: s.ok, acc: s.acc, activeS: Math.round(C.activeMs / 1000) });
+    traceEnd(saved.id, { n: s.n, ok: s.ok, acc: s.acc, activeS: Math.round(C.activeMs / 1000), ...(aborted ? { aborted: true } : {}) });
     showResult(s);
   }
 
@@ -323,6 +355,7 @@ export function initCopy(deps) {
     if (C.fatEvents.length) d.push(t('copy.fatNote'));
     if (s.drift !== null && s.drift > 1) d.push(t('copy.drift', { n: num(s.drift) }));
     d.push(t('copy.counts', { ok: s.ok, sub: s.sub, del: s.del, ins: s.ins, n: s.n, rounds: s.rounds }));
+    if (s.mask) d.push(t('copy.maskNote', { n: s.mask }));
     if (s.confusions.length) d.push(`${t('result.confusions', { list: s.confusions.slice(0, 5).map((c) => `${c.pair} ${c.n}×`).join(', ') })}.`);
     $('#cr-detail').textContent = d.join(' ');
     const ld = deps.currentLoad();
@@ -370,6 +403,7 @@ export function initCopy(deps) {
     start, onKey, onChar, onSpace,
     pause: () => (!$('#cp-fatigue-overlay').hidden ? fatigueChoice('pause') : C.paused ? resume() : pause()),
     hold: pause,
+    abort: () => { if (C.running) finish(true); }, // 0.9.7 (Z-06): page closed – keep the finished lines
     get running() { return C.running; },
   };
 }

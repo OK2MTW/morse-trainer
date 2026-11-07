@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Content of a copy-behind lesson (M7): a registry of generators by content kind. Items only from mastered characters.
 // M8 (U4): abbreviations and Q codes, generated call signs, long words, a mix. U5 adds QSO – just extend GENERATORS.
+// 0.10.9: abbreviations and Q codes only from items mastered in the vocabulary trainer (vocab.js copyAbbrForms) –
+// passed in as `abbrForms`; too few of them → filled up with words.
 // Python port: tests/content.py.
 import { WORDS, WORDS_LONG } from './words.js';
-import { ABBR } from './abbr.js';
 
 export const GROUP_MIN = 2;          // groups of 2–3 characters (ladder steps 1–2)
 export const GROUP_MAX = 3;
@@ -87,7 +88,7 @@ function fromList(avail, min, rng, fb) {
   return fb();
 }
 
-export function abbr(chars, rng, avail = listFor(ABBR, chars)) { return fromList(avail, ABBR_MIN, rng, () => word(chars, rng)); }
+export function abbr(chars, rng, avail = []) { return fromList(avail, ABBR_MIN, rng, () => word(chars, rng)); }
 
 export function longWord(chars, rng, avail = listFor(WORDS_LONG, chars)) { return fromList(avail, LONG_MIN, rng, () => word(chars, rng)); }
 
@@ -107,30 +108,91 @@ export function call(chars, rng) {
 }
 
 /** Mix for U4 (preparation for QSOs): words, abbreviations and Q codes, call signs. */
-export function mixed(chars, rng) {
+export function mixed(chars, rng, abbrAvail = []) {
   const r = rng();
   if (r < MIX_WORDS / 2) return word(chars, rng);
   if (r < MIX_WORDS) return longWord(chars, rng);
-  if (r < MIX_WORDS + MIX_ABBR) return abbr(chars, rng);
+  if (r < MIX_WORDS + MIX_ABBR) return abbr(chars, rng, abbrAvail);
   return call(chars, rng);
+}
+
+// M9 (U5): QSO lines from templates – {A} = the calling station, {B} = the other one; values from short lists.
+// A whole line is several items (words); the stream keeps its order (no de-duplication: "CQ CQ" belongs to it).
+export const QSO_TEMPLATES = [
+  'CQ CQ CQ DE {A} {A} {A} K',
+  'CQ CQ DE {A} {A} PSE K',
+  '{B} DE {A} GM TNX FER CALL = UR RST {RST} {RST} = NAME {NAME} {NAME} = QTH {QTH} {QTH} = HW? {B} DE {A} KN',
+  '{A} DE {B} R FB = UR RST {RST} = NAME {NAME} = QTH {QTH} = RIG {RIG} PWR {PWR}W ANT {ANT} = WX {WX} TEMP {TEMP}C = {A} DE {B} K',
+  '{B} DE {A} R TNX FER RPRT = QSL VIA BURO = TNX QSO ES 73 GL = {B} DE {A} SK',
+  '{A} DE {B} TU 73 ES CUAGN = {A} DE {B} SK',
+  'QRZ? DE {A} K',
+  '{B} {A} 5NN {NR} {NR} TU',
+];
+export const QSO_NAMES = ['PETR', 'JAN', 'TOM', 'EVA', 'KAREL', 'JIRI', 'PAVEL', 'HANS', 'JOHN', 'MIKE', 'ANNA', 'LUKAS'];
+export const QSO_QTH = ['BRNO', 'PRAHA', 'OLOMOUC', 'LIBEREC', 'PLZEN', 'OSTRAVA', 'BERLIN', 'WIEN', 'KRAKOW', 'LONDON'];
+export const QSO_WX = ['SUNNY', 'CLOUDY', 'RAIN', 'SNOW', 'FOG', 'WINDY'];
+export const QSO_RIG = ['IC7300', 'FT991', 'K3', 'TS590', 'FT817', 'HOMEMADE'];
+export const QSO_ANT = ['DIPOLE', 'GP', 'YAGI', 'LW', 'LOOP', 'VERTICAL'];
+export const QSO_PWR = ['5', '10', '50', '100'];
+
+/** One QSO line as items (words) from mastered characters only; null when no template fits the character set. */
+export function qsoLine(chars, rng) {
+  const v = qsoValues(chars, rng);
+  const fits = QSO_TEMPLATES.map((tpl) => fillQso(tpl, v)).filter((s) => fitsChars(s, chars));
+  return fits.length ? pick(fits, rng).split(' ') : null;
+}
+
+/** Values of one QSO ({A} calling, {B} answering, RST, NAME…) from mastered characters (null = no value fits). */
+export function qsoValues(chars, rng) {
+  const pickOk = (list) => { const l = list.filter((x) => fitsChars(x, chars)); return l.length ? pick(l, rng) : null; };
+  const a = call(chars, rng);
+  let b = call(chars, rng);
+  for (let i = 0; i < 5 && b === a; i++) b = call(chars, rng);
+  return {
+    A: a, B: b, RST: `5${pick(['5', '7', '9'], rng)}9`, NR: String(1 + Math.floor(rng() * 400)).padStart(3, '0'),
+    NAME: pickOk(QSO_NAMES), QTH: pickOk(QSO_QTH), WX: pickOk(QSO_WX), RIG: pickOk(QSO_RIG), ANT: pickOk(QSO_ANT),
+    PWR: pickOk(QSO_PWR), TEMP: String(Math.floor(rng() * 25)),
+  };
+}
+
+/** Template with {KEY} placeholders → text (a missing value leaves a NUL, which no character set contains). */
+export const fillQso = (tpl, v) => tpl.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '\u0000');
+
+/** Every character of the text (spaces aside) is in chars. */
+export function fitsChars(text, chars) {
+  const set = new Set(chars);
+  return [...text.replace(/ /g, '')].every((c) => set.has(c));
+}
+
+/** n items of QSO lines in order (falls back to the mix when the characters do not allow any line). */
+export function qso(chars, n, rng) {
+  const out = [];
+  for (let guard = 0; out.length < n && guard < n; guard++) {
+    const l = qsoLine(chars, rng);
+    if (!l) return Array.from({ length: n }, () => mixed(chars, rng));
+    out.push(...l);
+  }
+  return out.slice(0, n);
 }
 
 export const GENERATORS = {
   groups: (chars, n, rng) => Array.from({ length: n }, () => group(chars, rng)),
   pseudo: (chars, n, rng) => Array.from({ length: n }, () => pseudo(chars, rng)),
   words: (chars, n, rng) => { const av = wordsFor(chars); return Array.from({ length: n }, () => word(chars, rng, av)); },
-  abbr: (chars, n, rng) => Array.from({ length: n }, () => abbr(chars, rng)),
+  abbr: (chars, n, rng, ab = []) => { const av = listFor(ab, chars); return Array.from({ length: n }, () => abbr(chars, rng, av)); },
   calls: (chars, n, rng) => Array.from({ length: n }, () => call(chars, rng)),
   long: (chars, n, rng) => Array.from({ length: n }, () => longWord(chars, rng)),
-  mix: (chars, n, rng) => Array.from({ length: n }, () => mixed(chars, rng)),
+  mix: (chars, n, rng, ab = []) => { const av = listFor(ab, chars); return Array.from({ length: n }, () => mixed(chars, rng, av)); },
+  qso: (chars, n, rng) => qso(chars, n, rng),
 };
 
-/** n items of the given kind from mastered characters. Neighbouring items do not repeat. */
-export function makeItems(content, chars, n, rng = Math.random) {
+/** n items of the given kind from mastered characters (abbrForms: mastered abbreviations, 0.10.9). Neighbouring items do not repeat. */
+export function makeItems(content, chars, n, rng = Math.random, abbrForms = []) {
+  if (content === 'qso') return qso(chars, n, rng); // a QSO keeps its order and repetitions
   const gen = GENERATORS[content] || GENERATORS.groups;
   const out = [];
   for (let guard = 0; out.length < n && guard < n * 10; guard++) {
-    const [it] = gen(chars, 1, rng);
+    const [it] = gen(chars, 1, rng, abbrForms);
     if (it && it !== out.at(-1)) out.push(it);
   }
   return out;

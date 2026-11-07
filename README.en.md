@@ -48,3 +48,5 @@ If you want to take the project in a different direction, make your own fork –
 **EUPL-1.2** (see [LICENSE](LICENSE)). Anyone who makes a modified version available to others (including over a
 network) must also make its source code available. Third-party components and credits are listed in the Czech
 README and on the "O aplikaci" (About) page of the app.
+Exact versions of the installed components and their licences: [sbom.cdx.json](sbom.cdx.json) (CycloneDX,
+`python -m tools.sbom --write`).

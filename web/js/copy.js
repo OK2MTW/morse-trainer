@@ -55,19 +55,40 @@ export function align(sent, typed) {
   return ops.reverse();
 }
 
-/** Operation counts, accuracy after alignment and confusions {`S→H`: n}. */
-export function score(ops, sent, typed) {
-  const c = { ok: 0, sub: 0, del: 0, ins: 0 };
+/**
+ * M9 part 2: operations that do not count – on a masked sent character (skip[s], the band made it unreadable) and an
+ * extra character right next to a masked one. Returns an array of true/false by operation index.
+ */
+export function ignoredOps(ops, skip) {
+  const out = ops.map(() => false);
+  if (!skip || !skip.some(Boolean)) return out;
+  const prev = new Array(ops.length).fill(false); // nearest sent character before / after the operation is masked
+  const next = new Array(ops.length).fill(false);
+  for (let k = 0, m = false; k < ops.length; k++) { prev[k] = m; if (ops[k].s !== null) m = !!skip[ops[k].s]; }
+  for (let k = ops.length - 1, m = false; k >= 0; k--) { next[k] = m; if (ops[k].s !== null) m = !!skip[ops[k].s]; }
+  ops.forEach((o, k) => { out[k] = o.s !== null ? !!skip[o.s] : prev[k] || next[k]; });
+  return out;
+}
+
+/**
+ * Operation counts, accuracy after alignment and confusions {`S→H`: n}. skip (M9 part 2) = masked sent characters:
+ * they count neither way (mask = their number, n = sent characters that count).
+ */
+export function score(ops, sent, typed, skip = null) {
+  const c = { ok: 0, sub: 0, del: 0, ins: 0, mask: 0 };
   const conf = {};
-  for (const o of ops) {
+  const ign = ignoredOps(ops, skip);
+  for (const [k, o] of ops.entries()) {
+    if (ign[k]) { if (o.s !== null) c.mask++; continue; }
     c[o.op]++;
     if (o.op === 'sub') {
       const k = `${sent[o.s]}→${typed[o.t]}`;
       conf[k] = (conf[k] || 0) + 1;
     }
   }
-  const den = sent.length + c.ins;
-  return { ...c, n: sent.length, acc: den ? c.ok / den : null, conf };
+  const n = sent.length - c.mask;
+  const den = n + c.ins;
+  return { ...c, n, acc: den ? c.ok / den : null, conf };
 }
 
 export function median(arr) {
@@ -135,7 +156,7 @@ function wordLag(samples) {
  * Word results: words = array of words (strings), ops over the joined characters. A word is correct when all its
  * characters are correct and there is nothing extra inside the word. Returns an array of true/false.
  */
-export function wordResults(words, ops) {
+export function wordResults(words, ops, skip = null) {
   const wordOf = [];
   words.forEach((wd, k) => { for (let i = 0; i < wd.length; i++) wordOf.push(k); });
   const ok = words.map(() => true);
@@ -145,12 +166,13 @@ export function wordResults(words, ops) {
     nextWord[k] = nw;
     if (ops[k].s !== null) nw = wordOf[ops[k].s];
   }
+  const ign = ignoredOps(ops, skip);
   let lastWord = -1;
   ops.forEach((o, k) => {
     if (o.s !== null) {
       lastWord = wordOf[o.s];
-      if (o.op !== 'ok') ok[lastWord] = false;
-    } else if (lastWord >= 0 && nextWord[k] === lastWord) {
+      if (o.op !== 'ok' && !ign[k]) ok[lastWord] = false;
+    } else if (!ign[k] && lastWord >= 0 && nextWord[k] === lastWord) {
       ok[lastWord] = false; // extra inside a word (on a word boundary it counts against neither)
     }
   });
@@ -165,22 +187,23 @@ export function evaluate(words, chars, typed) {
   const sent = chars.map((c) => c.ch);
   const tch = typed.map((x) => x.ch);
   const ops = align(sent, tch);
+  const skip = chars.some((c) => c.mask) ? chars.map((c) => !!c.mask) : null; // M9 part 2: masked by the band
   return {
-    ops, sc: score(ops, sent, tch),
+    ops, sc: score(ops, sent, tch, skip),
     lags: lagSamples(ops, chars.map((c) => c.end), typed.map((x) => x.t), chars.map((c) => c.w)),
-    words: wordResults(words, ops),
+    words: wordResults(words, ops, skip),
   };
 }
 
 /** Lesson summary from lines [{words, chars, typed, ev}] → detail.copy (without step and content – added by the caller). */
 export function lessonSummary(rounds) {
-  const c = { ok: 0, sub: 0, del: 0, ins: 0, n: 0 };
+  const c = { ok: 0, sub: 0, del: 0, ins: 0, n: 0, mask: 0 };
   const conf = {};
   const lags = [];
   let wn = 0;
   let wok = 0;
   for (const r of rounds) {
-    for (const k of ['ok', 'sub', 'del', 'ins', 'n']) c[k] += r.ev.sc[k];
+    for (const k of ['ok', 'sub', 'del', 'ins', 'n', 'mask']) c[k] += r.ev.sc[k] || 0;
     for (const [k, v] of Object.entries(r.ev.sc.conf)) conf[k] = (conf[k] || 0) + v;
     lags.push(...r.ev.lags);
     wn += r.ev.words.length;

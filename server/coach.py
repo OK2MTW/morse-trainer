@@ -15,6 +15,7 @@ from server.i18n import fmt_num, t
 # copy behind ("skluz" = lag).
 MODE_CHAR = "znak"
 MODE_COPY = "skluz"
+MODE_HEAD = "hlava"  # U6 (0.10.14): head copy – listen to a QSO without typing, then write its key data
 
 # ================= questionnaire =================
 # Each question: id, option values, optionally "when" = (question id, {allowed values}).
@@ -183,6 +184,7 @@ def questions_json():
 
 # ================= calibration and plan estimate (R1 ch. 4) =================
 SET_SIZE = 51
+CORE_SIZE = 44        # 0.9.6: the main programme; the last 7 (rare punctuation) are an optional extension – levels use the core only
 CALIB_CHARS = 2       # calibration done after 2 added characters (or after 3 lessons)
 CALIB_LESSONS = 3
 DEFAULT_DAY_MIN = 20
@@ -227,7 +229,7 @@ def plan_estimate(lessons, level, archetype, prefs):
         per = ARCHETYPES[arch][1]
         rate = None
         source = "prior"
-    left = max(0, SET_SIZE - level)
+    left = max(0, CORE_SIZE - level)
     cur = mins.get(level, 0)
     # remaining characters + the newest one in progress (minus the minutes already spent on it)
     rem = [p * left + max(0, p - cur) if left else 0.0 for p in per]
@@ -255,7 +257,7 @@ PLATEAU_CHANGE = 5         # ≥ 5 sessions → suggest a change of plan
 # beginner, novice, intermediate, advanced, expert, master.
 ULEVELS = [{"id": i} for i in range(1, 7)]
 ULEVEL_FIELDS = ("name", "content", "mode", "goal")
-MAX_COMPUTED_ULEVEL = 5    # M7: U3 → U4 from copy behind; M8: U4 → U5; content of U5+ so far only state and criteria
+MAX_COMPUTED_ULEVEL = 6    # M7: U3 → U4 from copy behind; M8: U4 → U5; 0.10.14: U5 → U6 from head copy
 COPY_MIN_CHARS = 60        # M7: a copy-behind session is evaluated from 60 sent characters (same as web/js/copy.js)
 
 
@@ -270,7 +272,8 @@ def mode_of(r):
 
 def char_lessons(lessons):
     """Character lessons (waiting for an answer) – character statistics, U1/U2, pace and plateau are computed from them."""
-    return [r for r in lessons if mode_of(r) == MODE_CHAR]
+    # Z-14: the entry test is not a lesson (no drill, unknown characters on purpose) – only the statistics see it
+    return [r for r in lessons if mode_of(r) == MODE_CHAR and not _detail(r).get("entry")]
 
 
 def _ms(iso):
@@ -319,10 +322,12 @@ def char_table(lessons):
 
 
 def u1_status(lessons, level):
-    """How many of the 51 characters hold ≥ 90 % (of ≥ 5 trials) in recent lessons, and whether it is done."""
+    """How many of the 44 characters of the main programme hold ≥ 90 % (of ≥ 5 trials) in recent lessons, and whether
+    it is done. The optional extension (0.9.6) never blocks a level."""
     tab = char_table(char_lessons(lessons)[-LEVEL_WINDOW:])
-    good = sum(1 for n, c in tab.values() if n >= CHAR_MIN_N and c / n >= CHAR_ACC - 1e-9)
-    return {"good": good, "of": SET_SIZE, "done": level >= SET_SIZE and good >= SET_SIZE}
+    core = set(KOCH[:CORE_SIZE])
+    good = sum(1 for ch, (n, c) in tab.items() if ch in core and n >= CHAR_MIN_N and c / n >= CHAR_ACC - 1e-9)
+    return {"good": good, "of": CORE_SIZE, "done": level >= CORE_SIZE and good >= CORE_SIZE}
 
 
 def session_summary(ses):
@@ -369,7 +374,12 @@ def computed_ulevel(lessons, level, stored=1):
         def two(ok):
             return len(cs) >= 2 and ok(cs[0]) and ok(cs[1])
         u4 = two(copy_u4_ok)
-        if (u4 or (stored or 1) >= 4) and two(copy_u5_ok):
+        u5 = (u4 or (stored or 1) >= 4) and two(copy_u5_ok)
+        if u5 or (stored or 1) >= 5:  # 0.10.14: U5 → U6 – head copy at 40 WPM clean in 2 sessions
+            hs = head_sessions(lessons)
+            if len(hs) >= 2 and head_u6_ok(hs[0]) and head_u6_ok(hs[1]):
+                return 6
+        if u5:
             return 5
         if u4:
             return 4
@@ -380,10 +390,10 @@ def next_criteria(ulevel, lessons, level):
     """What is missing for the next level – feedback about the task (not about the person)."""
     if ulevel == 1:
         st = u1_status(lessons, level)
-        items = [t("coach.next.u1Chars", level=level, of=SET_SIZE),
-                 t("coach.next.u1Good", good=st["good"], of=SET_SIZE),
+        items = [t("coach.next.u1Chars", level=min(level, CORE_SIZE), of=CORE_SIZE),
+                 t("coach.next.u1Good", good=st["good"], of=CORE_SIZE),
                  t("coach.next.twoSessions")]
-        return {"target": 2, "items": items, "ratio": round(min(level, st["good"]) / SET_SIZE, 3)}
+        return {"target": 2, "items": items, "ratio": round(min(level, st["good"], CORE_SIZE) / CORE_SIZE, 3)}
     if ulevel == 2:
         ses = sessions_of(char_lessons(lessons))
         s = session_summary(ses[-1]) if ses else None
@@ -405,7 +415,7 @@ def next_criteria(ulevel, lessons, level):
                          + (t("coach.next.copyLastLag", lag=fmt_num(s["lagCh"])) if s["lagCh"] is not None else ""))
         return {"target": 4, "items": items, "ratio": None}
     if ulevel == 4:
-        last = COPY_STEPS[-1]
+        last = COPY_STEPS[COPY_U4_LAST - 1]
         items = [t("coach.next.u4Step", step=last["step"], name=step_name(last), wpm=last["wpm"]),
                  t("coach.next.u4Acc", acc=round(COPY_U5_ACC * 100), words=round(COPY_U5_WORDS * 100), n=COPY_MIN_CHARS),
                  t("coach.next.u4Drift", n=COPY_DRIFT_MAX_U4),
@@ -416,7 +426,16 @@ def next_criteria(ulevel, lessons, level):
             items.append(t("coach.next.copyLastWpm", step=s["step"], wpm=s["wpm"], acc=round(s["acc"] * 100))
                          + (t("coach.next.copyLastWords", words=round(s["words"] * 100)) if s["words"] is not None else ""))
         return {"target": 5, "items": items, "ratio": None}
-    return {"target": min(6, ulevel + 1), "items": [t("coach.next.u5", n=len(COPY_STEPS))], "ratio": None}
+    if ulevel == 5:
+        st = HEAD_STEPS[HEAD_U6_STEP - 1]
+        items = [t("coach.next.u5", a=COPY_U4_LAST + 1, n=len(COPY_STEPS)),
+                 t("coach.next.u5Head", step=st["step"], wpm=st["wpm"], acc=round(HEAD_U6_ACC * 100), n=HEAD_MIN_Q),
+                 t("coach.next.twoSessions")]
+        hs = head_sessions(lessons)
+        if hs:
+            items.append(t("coach.next.headLast", step=hs[0]["step"], wpm=hs[0]["wpm"], acc=round(hs[0]["acc"] * 100)))
+        return {"target": 6, "items": items, "ratio": None}
+    return {"target": 6, "items": [t("coach.next.u6")], "ratio": None}
 
 
 def _key(r):
@@ -503,7 +522,7 @@ def speed_advice(lessons, level, ulevel, cur, plat=None):
     wpm, fwpm = int(cur.get("wpm") or 20), int(cur.get("fwpm") or 15)
     fwpm = min(fwpm, wpm)
     ses = speed_sessions(lessons, (wpm, fwpm))
-    u2 = ulevel >= 2 and level >= SET_SIZE
+    u2 = ulevel >= 2 and level >= CORE_SIZE
     out = {"wpm": wpm, "fwpm": fwpm, "change": None, "sessions": len(ses),
            "fluencyS": (FLUENCY_PLATEAU_S if plat and plat.get("change") else FLUENCY_S) if u2 else 0}
     to, kind, why = None, None, None
@@ -549,8 +568,8 @@ def speed_advice(lessons, level, ulevel, cur, plat=None):
 # wpm = speed of the character and gaps in a copy-behind lesson (None = settings from M6); markLag = the mark of word k
 # only after word k+markLag (just the timing of feedback). U5 will append more steps (QSO, interference, 27–35 WPM).
 # The name of a step is translated by its content ("coach.content.<content>").
-def _st(step, ul, content, gapX, wpm=None, markLag=1):
-    return {"step": step, "ulevel": ul, "content": content, "gapX": gapX, "wpm": wpm, "markLag": markLag}
+def _st(step, ul, content, gapX, wpm=None, markLag=1, band=None):
+    return {"step": step, "ulevel": ul, "content": content, "gapX": gapX, "wpm": wpm, "markLag": markLag, "band": band}
 
 
 COPY_STEPS = [
@@ -567,7 +586,22 @@ COPY_STEPS = [
     _st(11, 4, "mix", 1.0, 21, 2),
     _st(12, 4, "mix", 1.0, 23, 2),
     _st(13, 4, "mix", 1.0, 25, 2),
+    # M9 (U5): QSO lines, then the band (web/js/band.js BAND_LADDER) one element at a time, then speed 27–35 WPM
+    _st(14, 5, "qso", 1.0, 25, 2),
+    _st(15, 5, "qso", 1.0, 25, 2, "u5noise"),
+    _st(16, 5, "qso", 1.0, 25, 2, "u5qsb"),
+    _st(17, 5, "qso", 1.0, 25, 2, "u5qrm"),
+    _st(18, 5, "qso", 1.0, 25, 2, "u5mix"),
+    _st(19, 5, "qso", 1.0, 25, 2, "u5band"),
+    _st(20, 5, "qso", 1.0, 27, 2, "u5band"),
+    _st(21, 5, "qso", 1.0, 30, 2, "u5band"),
+    _st(22, 5, "qso", 1.0, 33, 2, "u5band"),
+    _st(23, 5, "qso", 1.0, 35, 2, "u5band"),
 ]
+COPY_EARLY_MIN = 10        # Z-16 (0.9.9): trial copy behind before U3 from this many mastered characters …
+COPY_EARLY_LAST = 2        # … only on steps 1–2 (groups); the coach still recommends character lessons
+COPY_U4_LAST = 13          # M9: the last step of U4 (U4 → U5 criterion); steps 14+ belong to U5
+COPY_BANDS = {s["band"] for s in COPY_STEPS if s["band"]}
 COPY_U3_LAST = 6           # the last step of U3 (normal gaps, short words)
 COPY_SESSIONS = 2          # decision from the last 2 sessions on a step
 COPY_UP_ACC = 0.9          # both ≥ 90 % after alignment → next step
@@ -578,12 +612,13 @@ COPY_U5_ACC = 0.9          # M8: U4 → U5 on the last step (25 WPM) …
 COPY_U5_WORDS = 0.9        # … and whole words ≥ 90 % (R1 ch. 8)
 COPY_U5_WPM = 25
 COPY_DRIFT_MAX_U4 = 3      # in U4 a lag of a word is desirable, it just must not keep growing
-KOCH = "KMURESNAPTLWI.JZ=FOY,VG5/Q92H38B?47C1D60X'-:()\"@+&!"  # order as in web/js/charset.js
+KOCH = "KMURESNAPTLWI.JZ=FOYVG5/Q92H38B?47C1D60X-(+&,':)\"@!"  # order as in web/js/charset.js
 
 
 def step_name(st):
-    """Translated name of a copy-behind step (by its content)."""
-    return t(f"coach.content.{st['content']}")
+    """Translated name of a copy-behind step (by its content; M9: + the band situation)."""
+    name = t(f"coach.content.{st['content']}")
+    return f"{name} – {t('coach.band.' + st['band'])}" if st.get("band") else name
 
 
 def _copy(r):
@@ -648,9 +683,104 @@ def copy_u4_ok(sm):
 
 def copy_u5_ok(sm):
     """U4 → U5 (M8): last step, ≥ 25 WPM, ≥ 90 % after alignment, whole words ≥ 90 %, the lag does not run away."""
-    return (sm["step"] == len(COPY_STEPS) and sm["wpm"] >= COPY_U5_WPM and sm["acc"] >= COPY_U5_ACC - 1e-9
+    return (sm["step"] >= COPY_U4_LAST and sm["wpm"] >= COPY_U5_WPM and sm["acc"] >= COPY_U5_ACC - 1e-9
             and sm["words"] is not None and sm["words"] >= COPY_U5_WORDS - 1e-9
             and (sm["drift"] is None or sm["drift"] <= COPY_DRIFT_MAX_U4))
+
+
+# ================= head copy (U6, 0.10.14) =================
+# A QSO is played once, nothing is typed while listening; then HEAD_Q questions about its content (call, RST, name, QTH…)
+# answered by writing the value (owner 2026-11-07). Own ladder; from U4 only step 1 as a trial, the full ladder from U5,
+# U5 → U6 = 2 sessions ≥ 90 % on step HEAD_U6_STEP (40 WPM clean). Up/down like copy behind (2 sessions ≥ 90 % / < 75 %).
+def _hs(step, ul, wpm, band=None):
+    return {"step": step, "ulevel": ul, "wpm": wpm, "band": band}
+
+
+HEAD_STEPS = [
+    _hs(1, 4, 25), _hs(2, 5, 30), _hs(3, 5, 30, "u5noise"), _hs(4, 5, 35), _hs(5, 5, 35, "u5band"),
+    _hs(6, 5, 40), _hs(7, 6, 40, "u5band"), _hs(8, 6, 45),
+]
+HEAD_EARLY_LAST = 1        # U4: trial on step 1 only
+HEAD_U6_STEP = 6           # 40 WPM clean
+HEAD_U6_ACC = 0.9
+HEAD_MIN_Q = 12            # a session counts from 12 answered questions (= 4 QSOs)
+
+
+def head_step_name(st):
+    name = t("coach.head.name", wpm=st["wpm"])
+    return f"{name} – {t('coach.band.' + st['band'])}" if st.get("band") else name
+
+
+def head_step_of(r):
+    st = (_detail(r).get("head") or {}).get("step")
+    return st if isinstance(st, int) and 1 <= st <= len(HEAD_STEPS) else 1
+
+
+def head_summary(part):
+    q = sum(r.get("trials") or 0 for r in part)
+    if not q:
+        return None
+    ok = sum(r.get("correct") or 0 for r in part)
+    return {"n": q, "acc": ok / q, "step": head_step_of(part[-1]), "wpm": min(r.get("wpm") or 0 for r in part)}
+
+
+def head_sessions(lessons, step=None):
+    """Summaries of head-copy sessions, newest first (as copy_sessions: a series on one step, < HEAD_MIN_Q skipped)."""
+    out = []
+    for s in reversed(sessions_of(lessons)):
+        hd = [r for r in s if mode_of(r) == MODE_HEAD]
+        if not hd:
+            continue
+        part = [r for r in hd if step is None or head_step_of(r) == step]
+        if not part:
+            break
+        sm = head_summary(part)
+        if sm and sm["n"] >= HEAD_MIN_Q:
+            out.append(sm)
+    return out
+
+
+def head_u6_ok(sm):
+    return sm["step"] >= HEAD_U6_STEP and sm["wpm"] >= HEAD_STEPS[HEAD_U6_STEP - 1]["wpm"] and sm["acc"] >= HEAD_U6_ACC - 1e-9
+
+
+def head_advice(lessons, ulevel):
+    """Step of head copy for the next lesson: {available, early, step, of, wpm, band, name, change, next}."""
+    hd = [r for r in lessons if mode_of(r) == MODE_HEAD]
+    step = head_step_of(hd[-1]) if hd else 1
+    early = ulevel < 5
+    top = HEAD_EARLY_LAST if early else len(HEAD_STEPS)
+    step = min(step, top)
+    ses = head_sessions(lessons, step)
+    change = None
+    done = sum(1 for x in ses[:COPY_SESSIONS] if x["acc"] >= COPY_UP_ACC - 1e-9)
+    if len(ses) >= COPY_SESSIONS:
+        a, b = ses[0], ses[1]
+        pct = t("coach.pctPair", a=round(b["acc"] * 100), b=round(a["acc"] * 100))
+        if (a["acc"] >= COPY_UP_ACC - 1e-9 and b["acc"] >= COPY_UP_ACC - 1e-9 and step < top
+                and HEAD_STEPS[step]["ulevel"] <= ulevel):
+            change = {"kind": "up", "from": step, "to": step + 1, "why": t("coach.copy.up", acc=round(COPY_UP_ACC * 100), pct=pct)}
+        elif a["acc"] < COPY_EASE_ACC and b["acc"] < COPY_EASE_ACC and step > 1:
+            change = {"kind": "ease", "from": step, "to": step - 1,
+                      "why": t("coach.copy.ease", acc=round(COPY_EASE_ACC * 100), pct=pct)}
+    if change:
+        step = change["to"]
+        done = 0
+    st = HEAD_STEPS[step - 1]
+    if change:
+        change["text"] = t("coach.head.changed", a=change["from"], b=step, name=head_step_name(st))
+    if early:
+        nxt = t("coach.head.nextEarly")
+    elif step == HEAD_U6_STEP and ulevel < 6:
+        nxt = t("coach.head.nextU6", n=COPY_SESSIONS, acc=round(HEAD_U6_ACC * 100))
+    elif step == len(HEAD_STEPS):
+        nxt = t("coach.head.nextLast")
+    elif step == top or HEAD_STEPS[step]["ulevel"] > ulevel:
+        nxt = t("coach.head.nextLocked")
+    else:
+        nxt = t("coach.copy.next", n=COPY_SESSIONS, acc=round(COPY_UP_ACC * 100), done=done)
+    return {"available": ulevel >= 4, "early": early, "step": step, "of": len(HEAD_STEPS), "wpm": st["wpm"],
+            "band": st["band"], "name": head_step_name(st), "change": change, "next": nxt, "minQ": HEAD_MIN_Q}
 
 
 def mastered_chars(lessons):
@@ -663,13 +793,18 @@ def copy_advice(lessons, ulevel):
     """Ladder step of copy behind for the next lesson. Returns {available, step, of, content, gapX, name, chars, change, next}."""
     cps = [r for r in lessons if mode_of(r) == MODE_COPY]
     step = step_of(cps[-1]) if cps else 1
+    chars = mastered_chars(lessons)
+    # Z-16 (0.9.9): before U3 an optional trial from mastered characters, steps 1–2 only (cannot lead to U4: needs step 6)
+    early = ulevel < 3
+    top = COPY_EARLY_LAST if early else len(COPY_STEPS)
+    step = min(step, top)
     ses = copy_sessions(lessons, step)
     change = None
     if len(ses) >= COPY_SESSIONS:
         a, b = ses[0], ses[1]
         pct = t("coach.pctPair", a=round(b["acc"] * 100), b=round(a["acc"] * 100))
-        if (a["acc"] >= COPY_UP_ACC - 1e-9 and b["acc"] >= COPY_UP_ACC - 1e-9 and step < len(COPY_STEPS)
-                and COPY_STEPS[step]["ulevel"] <= ulevel):  # into U4 (step 7) only after reaching U4
+        if (a["acc"] >= COPY_UP_ACC - 1e-9 and b["acc"] >= COPY_UP_ACC - 1e-9 and step < top
+                and (early or COPY_STEPS[step]["ulevel"] <= ulevel)):  # into U4 (step 7) only after reaching U4
             change = {"kind": "up", "from": step, "to": step + 1,
                       "why": t("coach.copy.up", acc=round(COPY_UP_ACC * 100), pct=pct)}
         elif a["acc"] < COPY_EASE_ACC and b["acc"] < COPY_EASE_ACC and step > 1:
@@ -683,19 +818,21 @@ def copy_advice(lessons, ulevel):
     if change:
         change["text"] = (t("coach.copy.changed", a=change["from"], b=step, name=name, gap=gap)
                           + (t("coach.copy.changedWpm", wpm=st["wpm"]) if st["wpm"] else "") + ").")
-    if step == COPY_U3_LAST and ulevel < 4:
+    if early:
+        nxt = t("coach.copy.nextEarly", n=len(chars), last=COPY_EARLY_LAST)
+    elif step == COPY_U3_LAST and ulevel < 4:
         nxt = t("coach.copy.nextU3Last", n=COPY_SESSIONS, acc=round(COPY_U4_ACC * 100))
-    elif step == len(COPY_STEPS) and ulevel >= 5:
-        nxt = t("coach.copy.nextU4Done")
     elif step == len(COPY_STEPS):
+        nxt = t("coach.copy.nextU5Last")
+    elif step == COPY_U4_LAST and ulevel < 5:
         nxt = t("coach.copy.nextU4Last", n=COPY_SESSIONS, acc=round(COPY_U5_ACC * 100), words=round(COPY_U5_WORDS * 100),
                 wpm=COPY_U5_WPM)
     elif step < len(COPY_STEPS):
         nxt = t("coach.copy.next", n=COPY_SESSIONS, acc=round(COPY_UP_ACC * 100),
                 done=min(len(ses) if not change else 0, COPY_SESSIONS))
-    return {"available": ulevel >= 3, "step": step, "of": len(COPY_STEPS), "content": st["content"],
-            "gapX": st["gapX"], "name": name, "gap": gap, "chars": mastered_chars(lessons),
-            "wpm": st["wpm"], "markLag": st["markLag"], "ulevel": st["ulevel"],
+    return {"available": ulevel >= 3 or len(chars) >= COPY_EARLY_MIN, "early": early, "step": step, "of": len(COPY_STEPS),
+            "content": st["content"], "gapX": st["gapX"], "name": name, "gap": gap, "chars": chars,
+            "wpm": st["wpm"], "markLag": st["markLag"], "ulevel": st["ulevel"], "band": st["band"],
             "change": change, "next": nxt, "last": ses[0] if ses and not change else None}
 
 

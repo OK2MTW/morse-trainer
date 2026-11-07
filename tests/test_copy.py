@@ -191,3 +191,45 @@ class TestJsShape(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestMasked(unittest.TestCase):
+    """M9 part 2: characters masked by the band count neither way (threshold 90 % stays)."""
+
+    def chars(self, text, masked=()):
+        out, w = [], 0
+        for i, ch in enumerate(text.replace(' ', '')):
+            out.append({'ch': ch, 'w': 0, 'end': i * 400, **({'mask': 'm'} if i in masked else {})})
+        return out
+
+    def typed(self, text):
+        return [{'ch': ch, 't': 500 + i * 400} for i, ch in enumerate(text)]
+
+    def test_masked_error_not_counted(self):
+        ev = C.evaluate(['CQDE'], self.chars('CQDE', {2}), self.typed('CQXE'))
+        self.assertEqual((ev['sc']['ok'], ev['sc']['sub'], ev['sc']['mask'], ev['sc']['n']), (3, 0, 1, 3))
+        self.assertEqual(ev['sc']['acc'], 1.0)
+        self.assertEqual(ev['words'], [True])
+        self.assertEqual(ev['sc']['conf'], {})
+
+    def test_masked_correct_not_counted(self):
+        ev = C.evaluate(['CQDE'], self.chars('CQDE', {2}), self.typed('CQDE'))
+        self.assertEqual((ev['sc']['ok'], ev['sc']['mask'], ev['sc']['n']), (3, 1, 3))
+
+    def test_missing_and_extra_next_to_masked(self):
+        ev = C.evaluate(['CQDE'], self.chars('CQDE', {2}), self.typed('CQ'))  # D masked, E missing
+        self.assertEqual((ev['sc']['del'], ev['sc']['mask'], ev['sc']['n']), (1, 1, 3))
+        ev = C.evaluate(['CQDE'], self.chars('CQDE', {2}), self.typed('CQXYE'))  # D heard as two characters
+        self.assertEqual((ev['sc']['ins'], ev['sc']['ok'], ev['sc']['acc']), (0, 3, 1.0))
+        ev = C.evaluate(['CQDE'], self.chars('CQDE'), self.typed('CQXYE'))  # unmasked: counts as before
+        self.assertEqual((ev['sc']['ins'], ev['sc']['sub'], ev['sc']['mask']), (1, 1, 0))
+
+    def test_lesson_summary(self):
+        r1 = {'ev': C.evaluate(['CQDE'], self.chars('CQDE', {2}), self.typed('CQXE'))}
+        r2 = {'ev': C.evaluate(['TEST'], self.chars('TEST'), self.typed('TEST'))}
+        s = C.lesson_summary([r1, r2])
+        self.assertEqual((s['mask'], s['n'], s['ok']), (1, 7, 7))
+
+    def test_js_shape(self):
+        self.assertIn('export function ignoredOps(', C.COPY_JS)
+        self.assertIn("'n', 'mask']", C.COPY_JS)

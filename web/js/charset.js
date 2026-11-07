@@ -1,12 +1,23 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Character set of the trainer = the English (ITU + common extensions) set from morse-pro: 51 characters.
 
-// Koch order as in LCWO, extended by characters LCWO does not have.
+// Koch order as in LCWO, extended by characters LCWO does not have; the rare punctuation goes to the end (extension).
 export const KOCH_ORDER = [
   'K', 'M', 'U', 'R', 'E', 'S', 'N', 'A', 'P', 'T', 'L', 'W', 'I', '.', 'J', 'Z', '=', 'F', 'O', 'Y',
-  ',', 'V', 'G', '5', '/', 'Q', '9', '2', 'H', '3', '8', 'B', '?', '4', '7', 'C', '1', 'D', '6', '0', 'X',
-  "'", '-', ':', '(', ')', '"', '@', '+', '&', '!',
+  'V', 'G', '5', '/', 'Q', '9', '2', 'H', '3', '8', 'B', '?', '4', '7', 'C', '1', 'D', '6', '0', 'X',
+  '-', '(', '+', '&',
+  // optional extension (0.9.6): rarely used in amateur radio – learned only when turned on in the settings
+  ',', "'", ':', ')', '"', '@', '!',
 ];
+
+// 0.9.6: the main programme = the first CORE_SIZE characters; the rest is the optional extension.
+export const CORE_SIZE = 44;
+export const EXTRA_CHARS = KOCH_ORDER.slice(CORE_SIZE);
+
+/** Highest number of characters in the set: the main programme, or the whole set with the extension. */
+export function maxLevel(extraChars) {
+  return extraChars ? KOCH_ORDER.length : CORE_SIZE;
+}
 
 // Morse codes – only for computing how similar characters sound (never shown to the user,
 // the method is purely aural). Python tests read this table directly from this file.

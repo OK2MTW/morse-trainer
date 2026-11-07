@@ -5,6 +5,8 @@ import { otherSite } from './site.js';
 import { api, setCsrf, deviceKind, ApiError } from './api.js';
 import { bindPasswordRules } from './pwrules.js';
 import { setTraceUser } from './trace.js';
+import { showNews } from './news.js';
+import { startOnline, stopOnline } from './online.js';
 import {
   progress, settings, sync, cachedUser, rememberUser, openUser, forgetUser, syncNow, saveSettings, resetTraining,
 } from './storage.js';
@@ -42,6 +44,19 @@ const fmtDate = (iso) => (iso ? fmtDateL(iso, {
 function formError(form, msg) { form.querySelector('.form-error').textContent = msg || ''; }
 function busy(form, on) { for (const b of form.querySelectorAll('button')) b.disabled = on; }
 
+// 0.9.4: 429 (rate limit) or a server error is not "logged out" – retry a moment later (validation #9)
+const transient = (e) => e instanceof ApiError && (e.status === 429 || e.status >= 500);
+async function getMe() {
+  for (let i = 0; ; i++) {
+    try {
+      return await api('GET', '/me');
+    } catch (e) {
+      if (!transient(e) || i >= 2) throw e;
+      await new Promise((r) => { setTimeout(r, 1500 * (i + 1)); });
+    }
+  }
+}
+
 // ================= start =================
 /** Finds out the login state. Returns true if training is possible (online, or offline from the cache). */
 export async function startAuth(showFn) {
@@ -53,7 +68,7 @@ export async function startAuth(showFn) {
   if (m || r) history.replaceState(null, '', location.pathname); // do not leave the token in the address bar or history
   if (resetToken) { openReset(); return false; } // E3: a new-password link applies even when logged in (new password = new login)
   try {
-    const me = await api('GET', '/me');
+    const me = await getMe();
     if (inviteToken) {
       banner(t('auth.inviteWhileLoggedIn', { nick: me.user.nick }), true);
       inviteToken = null;
@@ -61,7 +76,7 @@ export async function startAuth(showFn) {
     await loggedIn(me.user, me.csrf);
     return true;
   } catch (e) {
-    if (e instanceof ApiError && e.offline) {
+    if (e instanceof ApiError && (e.offline || transient(e))) {
       const u = cachedUser();
       if (u && !inviteToken && !resetToken) {
         session.user = u; session.offline = true;
@@ -69,7 +84,7 @@ export async function startAuth(showFn) {
         sync.canTrain = u.role !== ROLE_ADMIN;
         openUser(u.id);
         setNick(u.nick);
-        banner(t('auth.offline'), true);
+        banner(e.offline ? t('auth.offline') : t('auth.serverBusy', { msg: e.message }), true);
         const o = otherSite(); // 0.8.2: away from home offer the outside version (and vice versa)
         if (o) {
           const a = document.createElement('a');
@@ -109,6 +124,18 @@ async function loggedIn(user, csrf, fresh = false, explicit = false) {
   } finally {
     session.langPinned = false;
   }
+  whatsNew();
+}
+
+/** 0.9.3: one-off overview of new features (online only, after a forced password change). */
+function whatsNew() {
+  const u = session.user;
+  if (!u || session.offline || u.pw_change) return;
+  showNews(u, (id) => {
+    if (session.user?.id !== u.id) return;
+    session.user = { ...session.user, news_seen: Math.max(Number(session.user.news_seen) || 0, id) };
+    rememberUser(session.user);
+  });
 }
 
 /** Call on an error with e.auth – the login expired or was revoked from another device. */
@@ -121,13 +148,14 @@ export function sessionExpired() {
 /** After an offline start: verify the session and get a CSRF token, then sync. */
 async function syncOnline() {
   if (session.offline) {
-    const me = await api('GET', '/me');
+    const me = await getMe();
     if (me.user.id !== session.user.id) throw Object.assign(new Error(t('auth.otherUser')), { status: 403, auth: true });
     setCsrf(me.csrf);
     session.user = me.user;
     session.offline = false;
     banner('');
     if (me.user.pw_change) { show('pwchange'); return null; } // E3: forced password change
+    whatsNew();
   }
   return syncNow();
 }
@@ -170,10 +198,19 @@ async function openRegister() {
     busy(f, false);
   } catch (err) {
     $('#reg-info').textContent = '';
-    formError(f, `${err.message} ${t('register.askNew')}`);
-    inviteToken = null;
+    if (err.status === 404 || err.status === 409) {
+      formError(f, `${err.message} ${t('register.askNew')}`);
+      inviteToken = null;
+    } else {
+      // 0.9.4: network / limit / rejected request – the invitation may be fine, keep it and offer a retry (validation #10)
+      formError(f, `${err.message} ${t('register.tryAgain')}`);
+      const b = $('#reg-retry');
+      b.hidden = false;
+      b.disabled = false;
+    }
   }
 }
+$('#reg-retry').addEventListener('click', () => { $('#reg-retry').hidden = true; formError($('#form-register'), ''); openRegister(); });
 
 const regValid = bindPasswordRules($('#form-register').password, $('#form-register').password2,
   () => $('#form-register').nick.value.trim());
@@ -280,6 +317,7 @@ $('#form-pwchange').addEventListener('submit', async (e) => {
     banner(t('pw.changed'));
     try { await syncNow(); } catch (err) { banner(t('sync.failed', { msg: err.message }), true); }
     show('home');
+    whatsNew();
   } catch (err) { formError(f, err.message); } finally { busy(f, false); }
 });
 $('#pwchange-logout').addEventListener('click', () => $('#acc-logout').click());
@@ -330,6 +368,7 @@ function setNick(nick) {
   $('#tab-account').textContent = nick || t('nav.account');
   $('#user-initial').textContent = nick ? [...nick][0].toUpperCase() : '?';
   $('#user-btn').title = nick ? t('nav.userTitle', { nick }) : t('nav.accountSettings');
+  if (nick) startOnline(); else stopOnline();
 }
 
 function signedOut(msg) {
