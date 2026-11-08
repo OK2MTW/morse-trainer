@@ -356,7 +356,8 @@ table.weeks tr.current td { font-weight: 600; }
 .vocab-opt:disabled { opacity: 1; }
 .vocab-table { width: 100%; border-collapse: collapse; }
 .vocab-table th, .vocab-table td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
-.vocab-code { font-family: monospace; font-weight: 700; white-space: nowrap; }
+.vocab-code { font-family: monospace; font-weight: 700; }
+.vocab-seg { white-space: nowrap; }  /* #30: wrap only between the parts of a series */
 .vocab-mistakes { margin: 4px 0 12px; padding-left: 20px; }
 /* 0.10.2 vocabulary – printable lists (print dialog → Save as PDF) */
 #vocab-print { display: none; }
@@ -372,3 +373,24 @@ table.weeks tr.current td { font-weight: 600; }
   .vp-blank { flex: 1; border-bottom: .5pt dotted #777; min-height: 1.1em; }
   .vp-foot { margin-top: 10pt; font-size: 8pt; color: #555; }
 }
+/* VK (0.11.0): telegraph key page – two large paddles, no selection / long-press menu, pressed state */
+.key-paddles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
+.key-paddles:has(#key-dash[hidden]) { grid-template-columns: 1fr; }
+.key-paddle {
+  min-height: 140px; font-size: 1.6rem; font-weight: 700; border-radius: 16px;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.key-paddle.down { background: var(--accent); color: #fff; }
+.key-text { font-family: monospace; font-size: 1.4rem; min-height: 1.6em; word-break: break-word; margin: 8px 0 2px; }
+.key-codes { font-family: monospace; word-break: break-word; }
+.send-ex { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 8px; }
+.send-ex-target { font-family: ui-monospace, "DejaVu Sans Mono", monospace; font-size: 2.2rem; font-weight: 700;
+  letter-spacing: .15em; text-align: center; margin: 6px 0; min-height: 1.2em; word-break: break-all; }
+.send-metrics { list-style: none; padding: 0; margin: 6px 0; }
+.send-metrics li { margin: 2px 0; }
+.send-metrics .st-mark { display: inline-block; width: 1.2em; font-weight: 700; }
+.send-metrics .st-good .st-mark { color: var(--ok); }
+.send-metrics .st-ok .st-mark { color: var(--miss); }
+.send-metrics .st-bad .st-mark { color: var(--bad); }
+.send-focus { font-weight: 600; margin: 6px 0; }
+.key-log td { font-family: monospace; font-variant-numeric: tabular-nums; padding: 1px 6px; }

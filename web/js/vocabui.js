@@ -150,7 +150,13 @@ export function initVocab({ sync, show, player = null, ensureAudio = null }) {
       const tr = el('tr');
       const meaning = el('td', null, t(vocabKey(V.tab, code)));
       if (VOCAB_ITEMS[V.tab][code].extra) meaning.append(' ', el('small', 'muted', t('vocab.extra'))); // not in the CTU list
-      tr.append(el('td', 'vocab-code', codeLabel(V.tab, code)), meaning,
+      // #30: a long series of prefixes wraps after commas only; each part (LO-LW) stays together
+      const codeTd = el('td', 'vocab-code');
+      codeLabel(V.tab, code).split(', ').forEach((part, i) => {
+        if (i) codeTd.append(', ');
+        codeTd.append(el('span', 'vocab-seg', part));
+      });
+      tr.append(codeTd, meaning,
         el('td', 'muted', s[0] ? `${mastered(s) ? '✓ ' : ''}${s[0] - s[1]}/${s[0]}` : '–'));
       body.append(tr);
     }

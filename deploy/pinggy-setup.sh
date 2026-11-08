@@ -31,6 +31,7 @@ touch "$APP_HOME/.ssh/known_hosts_pinggy" && chown "$APP_USER:$APP_USER" "$APP_H
 install_unit morse-pinggy.service
 systemctl daemon-reload
 systemctl restart morse-trainer   # loads the addresses from site.env
+record_deployed
 echo "Done (public address https://${PUBLIC_HOST}/)."
 echo "Tunel: sudo systemctl enable --now morse-pinggy | odpojit: sudo systemctl stop morse-pinggy"
 ss -tln | grep -q '127.0.0.1:8090' && echo "The public nginx entry listens only on 127.0.0.1:8090 – OK."

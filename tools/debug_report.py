@@ -128,6 +128,11 @@ def main(argv=None):
     for i, r in enumerate(reversed(rows)):
         data = json.loads(r["data"])
         last = i == len(rows) - 1
+        if r["kind"] == "klic":   # 0.12.3: key page recording (tones for the decoder), analysed separately
+            k = data.get("end") or {}
+            print(f"\n== {r['at'][:16]} {r['nick']} key recording: {len(k.get('tones', []))} tones, "
+                  f"{len(k.get('ex', []))} tasks, meant {k.get('meant')!r}, decoded {k.get('text')!r}")
+            continue
         (report_char if r["kind"] == MODE_CHAR else report_copy)(r, data, a.events and last)
     errs = con.execute(f"SELECT e.at, e.data, u.nick FROM client_errors e JOIN users u ON u.id = e.user_id {where} "
                        f"ORDER BY e.at DESC LIMIT 20", args).fetchall()

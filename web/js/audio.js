@@ -20,6 +20,7 @@ export class MorsePlayer {
     this._active = [];
     this.keep = false;
     this._keep = null;
+    this._side = null; // VK sidetone {osc, gain}
   }
 
   get ready() { return this.ctx !== null && this.ctx.state === 'running'; }
@@ -95,6 +96,56 @@ export class MorsePlayer {
     }
     const lat = (this.ctx.outputLatency || this.ctx.baseLatency || 0);
     return now + (t - this.ctx.currentTime + lat) * 1000;
+  }
+
+  // VK (0.11.0, spec A-12): sidetone for keying – one persistent oscillator whose gain is keyed with 5 ms edges, so
+  // a tone starts within milliseconds (no LEAD margin as in playback). Times are audio-clock seconds.
+  _sidetone() {
+    if (!this._side) {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      gain.gain.value = 0;
+      osc.connect(gain).connect(this.master);
+      osc.start();
+      this._side = { osc, gain };
+    }
+    const now = this.ctx.currentTime;
+    this._side.osc.frequency.setValueAtTime(this.settings.freq, now);
+    this.master.gain.setValueAtTime(this.settings.volume, now);
+    return this._side.gain.gain;
+  }
+
+  /** A generated element (keyer): tone from t0 to t1. */
+  sidetoneElement(t0, t1) {
+    if (!this.ready) return;
+    const g = this._sidetone();
+    g.setValueAtTime(0, t0);
+    g.linearRampToValueAtTime(1, t0 + RAMP);
+    g.setValueAtTime(1, Math.max(t0 + RAMP, t1 - RAMP));
+    g.linearRampToValueAtTime(0, t1);
+  }
+
+  /** Keying by hand (straight key, bug dashes): the tone on / off right now. */
+  sidetoneKey(on) {
+    if (!this.ready) return;
+    const g = this._sidetone();
+    const now = this.ctx.currentTime;
+    if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now); else g.cancelScheduledValues(now);
+    g.setTargetAtTime(on ? 1 : 0, now, RAMP / 3);
+  }
+
+  /** Leaving the key page: silence and free the oscillator. */
+  sidetoneOff() {
+    if (!this._side) return;
+    const { osc, gain } = this._side;
+    this._side = null;
+    try {
+      const now = this.ctx.currentTime;
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setTargetAtTime(0, now, RAMP / 3);
+      osc.stop(now + 4 * RAMP);
+    } catch (e) { /* already stopped */ }
   }
 
   // Returns the timing in ms (positive = tone, negative = silence) – directly from morse-pro.

@@ -17,6 +17,7 @@
  "err.pwChangeFirst": "Nejdřív si nastav nové heslo.",
  "err.forbidden": "Na tohle nemáš oprávnění.",
  "err.csrf": "Neplatný CSRF token – obnov stránku.",
+ "err.busy": "Server je teď plný ({n} lidí právě cvičí). Trénuj dál – výsledky se uloží, jakmile bude místo.",
  "err.tooManyLogins": "Příliš mnoho neúspěšných pokusů. Zkus to za 15 minut.",
  "err.badLogin": "Špatná přezdívka nebo heslo.",
  "err.adminHomeOnly": "Správce se může přihlásit jen z domácí sítě.",

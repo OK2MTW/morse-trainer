@@ -563,6 +563,30 @@
         <p class="hint" data-i18n="band.settingsHint">Development: noise, fading, interference and real keying – for coaches only.</p>
         <button type="button" data-go="band" data-i18n="band.open">🎧 Open band sound</button>
       </div>
+      <div class="card coach-only" hidden>
+        <h2 data-i18n="key.title">Telegraph key (experimental)</h2>
+        <div class="send-ex">
+          <div id="send-ex-ctl">
+            <label class="band-slider"><span data-i18n="send.ex.kindLabel">Sending exercise</span> <select id="send-ex-kind"></select></label>
+            <p class="hint" id="send-ex-intro"></p>
+            <button type="button" id="send-ex-start" data-i18n="send.ex.start">Start the exercise</button>
+          </div>
+          <div id="send-ex-run" hidden>
+            <p class="hint" id="send-ex-progress"></p>
+            <p class="send-ex-target" id="send-ex-target" aria-live="polite"></p>
+            <div id="send-ex-result" hidden></div>
+            <p class="hint" id="send-ex-hint"></p>
+            <div class="buttons">
+              <button type="button" id="send-ex-done" data-i18n="send.ex.done">Done (Enter)</button>
+              <button type="button" id="send-ex-next" data-i18n="send.ex.next" hidden>Next (Enter)</button>
+              <button type="button" id="send-ex-again" data-i18n="send.ex.again" hidden>Another series</button>
+              <button type="button" id="send-ex-stop" data-i18n="send.ex.stop">End the exercise</button>
+            </div>
+          </div>
+        </div>
+        <p class="hint" data-i18n="key.settingsHint">Sending: keyer with sidetone – keyboard or USB key converter and two on-screen paddles.</p>
+        <button type="button" data-go="key" data-i18n="key.open">🔑 Open the key</button>
+      </div>
       <div class="card">
         <h2 data-i18n="settings.diag">Diagnostics</h2>
         <button type="button" id="install" hidden data-i18n="settings.install">⬇ Install as an app</button>
@@ -593,6 +617,78 @@
           <label class="band-slider"><span data-i18n="band.param.filterBw">Receiver filter</span> <select id="band-filter"></select></label>
           <div id="band-sliders"></div>
           <p class="hint" data-i18n="band.adjustHint">Changes apply to the next line.</p>
+        </details>
+        <button type="button" data-go="settings" data-i18n="nav.settings">Settings</button>
+      </div>
+    </section>
+    <!-- VK (0.11.0): telegraph key – keyer, sidetone, converter test (experimental, coaches only) -->
+    <section id="view-key" class="view" hidden>
+      <div class="card">
+        <h2 data-i18n="key.title">Telegraph key (experimental)</h2>
+        <div class="send-ex">
+          <div id="send-ex-ctl">
+            <label class="band-slider"><span data-i18n="send.ex.kindLabel">Sending exercise</span> <select id="send-ex-kind"></select></label>
+            <p class="hint" id="send-ex-intro"></p>
+            <button type="button" id="send-ex-start" data-i18n="send.ex.start">Start the exercise</button>
+          </div>
+          <div id="send-ex-run" hidden>
+            <p class="hint" id="send-ex-progress"></p>
+            <p class="send-ex-target" id="send-ex-target" aria-live="polite"></p>
+          </div>
+        </div>
+        <div class="key-paddles">
+          <button type="button" id="key-dot" class="key-paddle" data-i18n="key.dot">· dot</button>
+          <button type="button" id="key-dash" class="key-paddle" data-i18n="key.dash">– dash</button>
+        </div>
+        <div id="send-ex-tail" hidden>
+          <p class="hint" id="send-ex-hint"></p>
+          <div class="buttons">
+            <button type="button" id="send-ex-done" data-i18n="send.ex.done">Done (Enter)</button>
+            <button type="button" id="send-ex-next" data-i18n="send.ex.next" hidden>Next (Enter)</button>
+            <button type="button" id="send-ex-again" data-i18n="send.ex.again" hidden>Another series</button>
+            <button type="button" id="send-ex-stop" data-i18n="send.ex.stop">End the exercise</button>
+          </div>
+          <div id="send-ex-result" hidden></div>
+        </div>
+        <p class="key-text" id="key-text" aria-live="polite">–</p>
+        <p class="hint key-codes" id="key-codes"></p>
+        <div id="key-free">
+          <p class="hint" data-i18n="key.paddlesHint">Hold a paddle; two fingers at once = squeeze. The sound starts with the first touch.</p>
+          <p class="hint" id="key-est"></p>
+          <div id="key-eval" class="send-eval" hidden></div>
+          <p class="hint" data-i18n="key.outHint">The decoder learns your rhythm from the neighbouring elements (dot and dash lengths and the gaps inside characters, between characters and words) – you do not have to keep the set tempo.</p>
+          <button type="button" id="key-clear" data-i18n="key.clear">Clear the transcript</button>
+          <div id="key-rec" hidden>
+            <p class="hint" data-i18n="key.rec.hint">Recording for tuning the decoder: write what you sent, then send it.</p>
+            <input type="text" id="key-rec-text" maxlength="200" autocomplete="off" data-i18n-attr="placeholder:key.rec.placeholder">
+            <button type="button" id="key-rec-send" data-i18n="key.rec.send">Send the recording</button>
+            <p class="hint" id="key-rec-status" aria-live="polite"></p>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <label class="band-slider"><span data-i18n="key.type">Key type</span> <select id="key-type"></select></label>
+        <p class="hint" id="key-type-hint"></p>
+        <div class="stepper key-wpm">
+          <span class="st-label" data-i18n="key.wpm">Keyer speed</span>
+          <button type="button" id="key-wpm-minus" class="st-btn" data-i18n-attr="aria-label:settings.decrease">−</button>
+          <output id="key-wpm-val"></output>
+          <button type="button" id="key-wpm-plus" class="st-btn" data-i18n-attr="aria-label:settings.increase">+</button>
+        </div>
+        <label class="check"><input type="checkbox" id="key-swap"> <span data-i18n="key.swap">Swap paddles (left-handed)</span></label>
+        <label class="check"><input type="checkbox" id="key-sidetone"> <span data-i18n="key.sidetone">Sidetone</span> <small data-i18n="key.sidetoneHint">(off when the converter has its own buzzer)</small></label>
+        <p class="hint" id="key-map"></p>
+        <div class="buttons">
+          <button type="button" id="key-learn" data-i18n="key.learn">Learn keys</button>
+          <button type="button" id="key-map-reset" data-i18n="key.mapReset">Default (Left/Right Ctrl)</button>
+        </div>
+      </div>
+      <div class="card">
+        <details>
+          <summary data-i18n="key.log">Events (converter acceptance test)</summary>
+          <p class="hint" data-i18n="key.logHint">Time from the first event and the gap to the previous one in ms.</p>
+          <p class="hint" id="key-log-count"></p>
+          <table class="diag key-log"><tbody id="key-log"></tbody></table>
         </details>
         <button type="button" data-go="settings" data-i18n="nav.settings">Settings</button>
       </div>

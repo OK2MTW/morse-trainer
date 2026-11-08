@@ -8,11 +8,41 @@ export function setCsrf(token) { csrf = token || ''; }
 // auth = not logged in / login expired. The server sends 403 + {auth: true} (not 401 – in Chrome that drops the
 // Basic auth password of the Pinggy tunnel and causes a loop of password prompts for the domain; see server/auth.py).
 export class ApiError extends Error {
-  constructor(message, status, auth = false) { super(message); this.status = status; this.auth = auth || status === 401; }
+  constructor(message, status, auth = false, busy = false) {
+    super(message); this.status = status; this.auth = auth || status === 401; this.busy = busy;
+  }
   get offline() { return this.status === 0; }
 }
 
+// Z-19 (0.10.19): the server is full (503 + busy from the app, 429 + busy from an nginx limit) → no requests until
+// busyUntil; the wait grows with every refusal (30 s → 5 min) and is spread randomly so that refused clients do not
+// come back together. Lessons wait in the queue (offline training). Requests the user starts by hand pass.
+export const BUSY_STEPS_S = [30, 60, 120, 300];
+const GATE_FREE = new Set(['/login', '/register', '/invite/check', '/password/reset', '/logout', '/logout-all',
+  '/client-errors']);
+const busy = { until: 0, step: 0, timer: null, msg: '', onEnd: null };
+
+/** Called once the wait is over (account.js: one background sync attempt). */
+export function setBusyEndHandler(fn) { busy.onEnd = fn; }
+export const serverBusy = () => Date.now() < busy.until;
+
+/** Pure: the wait in seconds after the step-th refusal (rnd 0–1, ±25 %); never shorter than the server asks. */
+export function busyWait(step, retryS, rnd) {
+  const base = BUSY_STEPS_S[Math.min(step, BUSY_STEPS_S.length - 1)];
+  return Math.max(base, Number(retryS) || 0) * (0.75 + 0.5 * rnd);
+}
+
+function noteBusy(retryS, msg) {
+  const wait = busyWait(busy.step, retryS, Math.random());
+  busy.step += 1;
+  busy.until = Date.now() + wait * 1000;
+  busy.msg = msg;
+  clearTimeout(busy.timer);
+  busy.timer = setTimeout(() => { busy.timer = null; if (busy.onEnd) busy.onEnd(); }, wait * 1000 + 50);
+}
+
 export async function api(method, path, data) {
+  if (serverBusy() && !GATE_FREE.has(path)) throw new ApiError(busy.msg, 503, false, true);
   const opts = { method, headers: { 'X-Lang': lang }, credentials: 'same-origin', cache: 'no-store' };
   if (data !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
@@ -29,8 +59,11 @@ export async function api(method, path, data) {
   try { json = await resp.json(); } catch (e) { /* empty / non-JSON response */ }
   if (!resp.ok) {
     const msg = json?.error || (resp.status === 429 ? t('api.tooMany') : t('api.serverError', { status: resp.status }));
-    throw new ApiError(msg, resp.status, json?.auth === true);
+    const isBusy = json?.busy === true && (resp.status === 503 || resp.status === 429);
+    if (isBusy) noteBusy(json.retry ?? resp.headers.get('Retry-After'), msg);
+    throw new ApiError(msg, resp.status, json?.auth === true, isBusy);
   }
+  if (busy.step) { busy.step = 0; busy.until = 0; clearTimeout(busy.timer); busy.timer = null; } // room again
   return json;
 }
 

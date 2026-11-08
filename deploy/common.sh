@@ -26,6 +26,22 @@ load_site_env() {
   PUBLIC_HOST=$(printf '%s' "$MORSE_PUBLIC_URL" | sed -E 's#^https?://##; s#[:/].*$##')
 }
 
+# Z-18c (0.10.18): fingerprint of the deployed files → /etc/morse-trainer/deployed.json (python -m tools.deployed
+# then tells "deploy/ is newer, run install.sh" from "edited by hand after the installation")
+record_deployed() {
+  local tmp
+  tmp=$(mktemp)
+  if sudo -u "$APP_USER" "$DIR/.venv/bin/python" -m tools.deployed --record > "$tmp"; then
+    install -m 644 "$tmp" /etc/morse-trainer/deployed.json
+  else
+    echo "Warning: the fingerprint of the deployed files was not recorded."
+  fi
+  rm -f "$tmp"
+}
+
+# Ignores comment lines (the unit comments were translated in 0.9.0 – a restart only for a real change)
+unit_body() { grep -v '^[[:space:]]*#' "$1" 2>/dev/null || true; }
+
 # Service template → /etc/systemd/system (fills in @USER@, @DIR@, @HOME@)
 install_unit() {
   sed -e "s#@USER@#$APP_USER#g" -e "s#@DIR@#$DIR#g" -e "s#@HOME@#$APP_HOME#g" "$DIR/deploy/$1" \

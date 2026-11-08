@@ -5,13 +5,13 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, request, send_from_directory
 
-from server import auth, db, site
+from server import admission, auth, db, site
 from server.api import bp as api_bp
 from server.i18n import current as current_lang, t
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
-VERSION = "0.10.17"
+VERSION = "0.12.4"
 # Addresses of a particular installation are not in the code (E3): server/site.py ← /etc/morse-trainer/site.env
 HOME_URL, PUBLIC_URL, PUBLIC_HOSTS = site.HOME_URL, site.PUBLIC_URL, site.PUBLIC_HOSTS
 
@@ -21,10 +21,18 @@ db.init_app(app)
 app.register_blueprint(api_bp)
 
 
+# Z-19 (0.10.19): requests that never wait for a free place (log out, report a client error, health)
+ADMISSION_FREE = {"health", "api.logout", "api.logout_all", "api.client_errors_post"}
+
+
 @app.before_request
 def before():
     auth.check_origin()
     auth.load_session()
+    # Z-19: who already trains keeps the full service; a newcomer over the limit gets 503 "full" (server/admission.py)
+    if (g.user is not None and request.path.startswith("/api/") and request.endpoint not in ADMISSION_FREE
+            and not admission.active.admit(g.user["id"], g.user["role"], auth.is_public())):
+        return admission.busy_response()
 
 
 @app.after_request

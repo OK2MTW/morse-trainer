@@ -11,6 +11,8 @@ os.environ["MORSE_ARGON2_MEMORY"] = "1024"  # fast tests; production uses 19 MiB
 os.environ["MORSE_SITE_ENV"] = os.path.join(_tmp, "site.env")  # does not exist → only the values below
 os.environ["MORSE_HOME_URL"] = "https://192.0.2.10/"
 os.environ["MORSE_PUBLIC_URL"] = "https://venku.example.org"
+os.environ["MORSE_MAX_ACTIVE"] = "0"          # Z-19: the suite registers many users quickly – no limit here,
+os.environ["MORSE_MAX_ACTIVE_PUBLIC"] = "0"   # AdmissionTest sets its own
 
 from server.app import app  # noqa: E402
 from server.admin import main as admin_main  # noqa: E402
@@ -68,7 +70,7 @@ class ApiTest(unittest.TestCase):
 
     def test_health_and_me(self):
         c = Client()
-        self.assertEqual(c.req("GET", "/api/health").get_json()["version"], "0.10.17")
+        self.assertEqual(c.req("GET", "/api/health").get_json()["version"], "0.12.4")
         r = c.req("GET", "/api/me")
         self.assertEqual(r.status_code, 403)  # 0.8.1: ne 401 (Basic auth Pinggy v Chromu)
         self.assertTrue(r.get_json()["auth"])
@@ -91,8 +93,8 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(Client().req("POST", "/api/news/seen", {"id": 1}).status_code, 403)
 
     def test_online(self):
-        from server import api as api_mod
-        api_mod._online.clear()
+        from server import admission
+        admission.active.clear()
         self.assertEqual(Client().req("GET", "/api/online").status_code, 403)
         c = Client()
         c.register(make_invite(), "Pripojeny")
@@ -101,10 +103,11 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(c.req("GET", "/api/online").get_json()["online"], 2)  # the same user counts once
         # a user silent longer than the window drops out
         t0 = 1000.0
-        api_mod._online.clear()
-        api_mod.online_count(1, t0)
-        self.assertEqual(api_mod.online_count(2, t0 + api_mod.ONLINE_WINDOW_S), 2)
-        self.assertEqual(api_mod.online_count(2, t0 + api_mod.ONLINE_WINDOW_S + 1), 1)
+        reg = admission.Register()
+        reg.touch(1, False, t0)
+        reg.touch(2, False, t0 + admission.WINDOW_S)
+        self.assertEqual(reg.counts(t0 + admission.WINDOW_S)[0], 2)
+        self.assertEqual(reg.counts(t0 + admission.WINDOW_S + 1)[0], 1)
 
     def test_cookie_flags(self):
         c = Client()
@@ -884,13 +887,17 @@ class DebugTraceTest(unittest.TestCase):
         self.assertTrue(c.req("GET", "/api/me").get_json()["user"]["debug"])
         self.assertTrue(c.req("POST", "/api/trace", tr).get_json()["ok"])
         self.assertEqual(c.req("POST", "/api/trace", {**tr, "kind": "x"}).status_code, 400)
+        # 0.12.3: a key page recording (tones for the decoder) is a trace of its own kind without a lesson
+        key = {"lesson_id": None, "kind": "klic", "at": "2026-11-08T10:00:00Z",
+               "data": {"meta": None, "ev": [], "end": {"meant": "CQ", "tones": [{"s": 0, "e": 180}]}}}
+        self.assertTrue(c.req("POST", "/api/trace", key).get_json()["ok"])
         big = {**tr, "data": {"ev": ["x" * 1000] * 210}}
         self.assertEqual(c.req("POST", "/api/trace", big).status_code, 413)
         r = c.req("POST", "/api/client-errors", {"errors": [{"msg": "TypeError: x", "stack": "s" * 5000}] * 30})
         self.assertTrue(r.get_json()["ok"])
         con = connect()
         uid = con.execute("SELECT id FROM users WHERE nick = 'Ladeni'").fetchone()[0]
-        self.assertEqual(con.execute("SELECT COUNT(*) FROM traces WHERE user_id = ?", (uid,)).fetchone()[0], 1)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM traces WHERE user_id = ?", (uid,)).fetchone()[0], 2)
         n, ln = con.execute("SELECT COUNT(*), MAX(LENGTH(data)) FROM client_errors WHERE user_id = ?", (uid,)).fetchone()
         self.assertEqual(n, 20)
         self.assertLess(ln, 3000)
@@ -933,6 +940,102 @@ class DebugTraceTest(unittest.TestCase):
         out = "\n".join(logs.output)
         self.assertIn("evil.example", out)
         self.assertNotIn("SECRET-TOKEN", out)
+
+
+
+class AdmissionTest(unittest.TestCase):
+    """Z-19 steps 2+3 (0.10.19): who trains keeps the service, a newcomer over the limit gets 503 "full"."""
+
+    @classmethod
+    def setUpClass(cls):
+        # a coach (exempt like the administrator; a second administrator would break ApiTest)
+        assert Client().register(make_invite("trener"), "Trener-z19").status_code == 201
+
+    def setUp(self):
+        from server import admission
+        self.adm = admission
+        self.saved = (admission.MAX_ACTIVE, admission.MAX_ACTIVE_PUBLIC)
+        admission.active.clear()
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        self.adm.MAX_ACTIVE, self.adm.MAX_ACTIVE_PUBLIC = self.saved
+        self.adm.active.clear()
+
+    def test_register_rules(self):
+        reg, t0 = self.adm.Register(), 100.0
+        self.assertTrue(reg.admit(1, "zak", False, t0, max_all=2, max_public=1))
+        self.assertTrue(reg.admit(2, "zak", True, t0, max_all=2, max_public=1))
+        self.assertFalse(reg.admit(3, "zak", False, t0, max_all=2, max_public=1))     # full for everybody
+        self.assertTrue(reg.admit(1, "zak", True, t0 + 1, max_all=2, max_public=1))   # already active → passes
+        self.assertTrue(reg.admit(4, "trener", True, t0, max_all=2, max_public=1))    # coach never refused
+        self.assertTrue(reg.admit(5, "admin", False, t0, max_all=2, max_public=1))
+        self.assertEqual(reg.counts(t0 + 1), (4, 3))
+        reg = self.adm.Register()
+        reg.touch(1, True, t0)
+        self.assertFalse(reg.admit(2, "zak", True, t0, max_all=10, max_public=1))     # public limit outside only
+        self.assertTrue(reg.admit(2, "zak", False, t0, max_all=10, max_public=1))     # LAN still gets in
+        self.assertFalse(reg.admit(None, None, True, t0, max_all=10, max_public=1))   # unknown newcomer outside
+        self.assertTrue(reg.admit(3, "zak", True, t0 + self.adm.WINDOW_S + 1, max_all=10, max_public=1))  # 1 left
+        self.assertTrue(reg.admit(9, "zak", False, t0, touch=False, max_all=0, max_public=0))   # 0 = no limit
+        self.assertNotIn(9, reg._seen)                                                # peek does not mark
+
+    def test_full_server(self):
+        a, b = Client(), Client()
+        self.assertEqual(a.register(make_invite(), "Prvni-plno").status_code, 201)
+        self.assertEqual(b.register(make_invite(), "Druhy-plno").status_code, 201)
+        self.adm.active.clear()
+        self.adm.MAX_ACTIVE, self.adm.MAX_ACTIVE_PUBLIC = 1, 0
+        self.assertEqual(a.req("GET", "/api/me").status_code, 200)   # a is the one active user
+        r = b.req("GET", "/api/me")                                   # b (valid session) is a newcomer → full
+        self.assertEqual(r.status_code, 503)
+        j = r.get_json()
+        self.assertTrue(j["busy"])
+        self.assertEqual(j["active"], 1)
+        self.assertIn("1", j["error"])
+        self.assertTrue(self.adm.RETRY_MIN_S <= int(r.headers["Retry-After"]) <= self.adm.RETRY_MAX_S)
+        self.assertEqual(j["retry"], int(r.headers["Retry-After"]))
+        self.assertEqual(a.req("GET", "/api/data").status_code, 200)            # the active one keeps going
+        self.assertEqual(a.req("GET", "/api/online").get_json()["online"], 1)
+        self.assertEqual(b.req("GET", "/api/health").status_code, 200)          # never limited
+        self.assertNotEqual(b.req("POST", "/api/client-errors", {"errors": []}).status_code, 503)
+        # login: refused before the password check (no argon2); unknown nick looks the same (no probing)
+        c = Client()
+        r1, r2 = c.login("Druhy-plno"), c.login("Nikdo-takovy")
+        self.assertEqual((r1.status_code, r2.status_code), (503, 503))
+        self.assertEqual(c.login("Druhy-plno", "spatne").status_code, 503)
+        self.assertEqual(c.register(make_invite(), "Treti-plno").status_code, 503)   # registration too
+        self.assertEqual(Client().login("Trener-z19").status_code, 200)             # coach / admin always
+        self.assertEqual(b.req("POST", "/api/logout").status_code, 200)               # leaving always works
+        # room again (a silent > window) → b gets in and is marked active
+        self.adm.active.clear()
+        self.assertEqual(c.login("Druhy-plno").status_code, 200)
+        self.assertEqual(c.req("GET", "/api/me").status_code, 200)
+        self.assertEqual(a.req("GET", "/api/me").status_code, 503)
+
+    def test_client_gate_matches_server(self):
+        """web/js/api.js: requests that never wait for room on the server must not be held back by the client either."""
+        import re
+        from pathlib import Path
+        from server.app import ADMISSION_FREE
+        js = (Path(__file__).resolve().parent.parent / "web/js/api.js").read_text(encoding="utf-8")
+        gate = set(re.findall(r"'(/[a-z/-]+)'", js[js.index("GATE_FREE"):js.index("]);", js.index("GATE_FREE"))]))
+        for ep in ADMISSION_FREE - {"health"}:
+            rule = next(r for r in app.url_map.iter_rules() if r.endpoint == ep)
+            self.assertIn(rule.rule.removeprefix("/api"), gate, ep)
+        self.assertTrue({"/login", "/register"} <= gate)            # started by hand → always tried
+        self.assertIn("BUSY_STEPS_S = [30, 60, 120, 300]", js)      # backoff 30 s → 5 min (docs/kapacita.md)
+
+    def test_public_limit_keeps_lan_open(self):
+        a, b = Client(), Client()
+        a.register(make_invite(), "Venku-1")
+        b.register(make_invite(), "Doma-1")
+        self.adm.active.clear()
+        self.adm.MAX_ACTIVE, self.adm.MAX_ACTIVE_PUBLIC = 10, 1
+        pub = {"Host": HOST, "X-Morse-Entry": "public"}
+        self.assertEqual(a.c.open("/api/me", headers=pub, base_url=f"https://{HOST}").status_code, 200)
+        self.assertEqual(b.c.open("/api/me", headers=pub, base_url=f"https://{HOST}").status_code, 503)  # outside full
+        self.assertEqual(b.req("GET", "/api/me").status_code, 200)                    # the same user from home: in
 
 
 if __name__ == "__main__":

@@ -36,7 +36,14 @@ if command -v ufw >/dev/null; then
 fi
 
 install_unit morse-trainer.service
+# the Pinggy tunnel only when it is installed (deploy/pinggy-setup.sh); restarted only when more than comments changed
+if [[ -f /etc/systemd/system/morse-pinggy.service ]]; then
+  pinggy_before=$(unit_body /etc/systemd/system/morse-pinggy.service)
+  install_unit morse-pinggy.service
+  [[ "$pinggy_before" == "$(unit_body /etc/systemd/system/morse-pinggy.service)" ]] || pinggy_changed=1
+fi
 systemctl daemon-reload
+[[ -z "${pinggy_changed:-}" ]] || systemctl try-restart morse-pinggy
 systemctl enable --now morse-trainer
 systemctl restart morse-trainer
 systemctl reload nginx
@@ -44,6 +51,8 @@ systemctl reload nginx
 for i in $(seq 1 20); do curl -s -o /dev/null http://127.0.0.1:8080/api/health && break; sleep 1; done
 systemctl --no-pager --lines=0 status morse-trainer nginx | grep -E '●|Active'
 curl -sk https://127.0.0.1/api/health && echo
+record_deployed
+sudo -u "$APP_USER" .venv/bin/python -m tools.deployed || true
 HOMEHOST=$(printf '%s' "$MORSE_HOME_URL" | sed -E 's#^https?://##; s#/.*$##')
 echo "Hotovo: ${MORSE_HOME_URL}   (CA pro telefon: http://${HOMEHOST}/ca.crt)"
 if ! sudo -u "$APP_USER" .venv/bin/python -c "from server import db; import sys; sys.exit(0 if db.connect().execute(\"SELECT 1 FROM users WHERE role='admin'\").fetchone() else 1)"; then

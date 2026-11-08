@@ -66,3 +66,44 @@ class TrainerUnitTest(unittest.TestCase):
         unit = (ROOT / 'deploy/morse-trainer.service').read_text(encoding='utf-8')
         self.assertIn('Environment=MALLOC_MMAP_THRESHOLD_=131072', unit)
         self.assertIn('MemoryMax=120M', unit)
+        self.assertIn('MemoryHigh=100M', unit)   # Z-19: slow down before MemoryMax kills the service
+
+
+class OverloadGuardTest(unittest.TestCase):
+    """0.10.18 (Z-19 steps 1+5, Z-21): limits of the public entry, JSON answer of nginx limits, compression."""
+
+    def blocks(self):
+        i = NGINX.index('E2/E3: public access via Pinggy')
+        return NGINX[:i], NGINX[i:]
+
+    def test_global_api_cap_outside(self):
+        _lan, pub = self.blocks()
+        self.assertIn('limit_req_zone $server_port zone=morse_pub_api_all', pub)
+        api = pub[pub.index('location /api/ {'):]
+        api = api[:api.index('}')]
+        self.assertIn('zone=morse_pub_api ', api)        # per IP stays
+        self.assertIn('zone=morse_pub_api_all ', api)    # plus all IPs together
+
+    def test_busy_json_both_entries(self):
+        for b in self.blocks():
+            self.assertIn('error_page 429 @busy;', b)
+            busy = b[b.index('location @busy {'):]
+            busy = busy[:busy.index('}')]
+            self.assertIn('default_type application/json;', busy)
+            self.assertIn('Retry-After', busy)
+            self.assertIn('{"busy":true', busy)
+            self.assertNotIn('"error"', busy)            # the client shows its own translated text (api.tooMany)
+        self.assertNotRegex(NGINX, r'(?m)^\s*proxy_intercept_errors\s+on')  # 429 of the app passes through
+
+    def test_public_keepalive_gzip(self):
+        _lan, pub = self.blocks()
+        self.assertIn('keepalive_timeout 20s;', pub)
+        self.assertIn('gzip on;', pub)
+        self.assertRegex(pub, r'gzip_types [^;]*application/javascript[^;]*application/json')
+        self.assertIn('X-Robots-Tag', pub[pub.index('location @busy'):])   # add_header in a location drops inherited ones
+
+    def test_install_records_fingerprint(self):
+        inst = (ROOT / 'deploy/install.sh').read_text(encoding='utf-8')
+        self.assertIn('record_deployed', inst)
+        self.assertIn('install_unit morse-pinggy.service', inst)
+        self.assertIn('record_deployed', (ROOT / 'deploy/pinggy-setup.sh').read_text(encoding='utf-8'))

@@ -30,6 +30,8 @@ import { initHead } from './headlesson.js';
 import { initEntry } from './entrytest.js';
 import { initDemo } from './demo.js';
 import { initBandLab } from './bandlab.js';
+import { initKeyerUi } from './keyerui.js';
+import { SEND_MIN_CHARS } from './sendeval.js';
 import { initDemoBand } from './demoband.js';
 import { initVocab } from './vocabui.js';
 import * as WPM from '../vendor/morse-pro/morse-pro-wpm.js';
@@ -90,17 +92,18 @@ function show(name) {
   for (const el of document.querySelectorAll('.public-only')) el.hidden = !out;
   const coach = session.user?.role === 'trener'; // ZB lab (development) – coaches only
   for (const el of document.querySelectorAll('.coach-only')) el.hidden = !coach;
-  if (name === 'band' && !coach) name = 'settings';
+  if ((name === 'band' || name === 'key') && !coach) name = 'settings'; // VK (0.11.0): experimental, coaches
   $('.usermenu').hidden = out;
   if (view === 'demo' && name !== 'demo') { demo.stop(); demoBand.stop(); }
   if (view === 'band' && name !== 'band') bandLab.stop();
+  if (view === 'key' && name !== 'key') keyUi.stop();
   if (view === 'vocab' && name !== 'vocab') vocab.stop();
   view = name;
   if (updateReload.pending && !updateReload.done && UPDATE_SAFE_VIEWS.includes(name)) { reloadForUpdate(); return; }
   for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== `view-${name}`;
   const training = ['lesson', 'intro', 'discrim', 'copy', 'head', 'entry'].includes(name);
   $('#keyboard').hidden = !['lesson', 'discrim', 'copy', 'demo', 'entry'].includes(name);
-  player.keepAlive(training && document.visibilityState === 'visible'); // 0.8.5: BT output must not fall asleep
+  player.keepAlive((training || name === 'key') && document.visibilityState === 'visible'); // 0.8.5: BT output must not fall asleep
   $('.tabs').hidden = training || name === 'pwchange' || (!session.user && !['login', 'demo'].includes(name));
   $('#user-btn').hidden = name === 'pwchange';
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.go === name);
@@ -113,6 +116,7 @@ function show(name) {
   if (name === 'quiz') openQuiz();
   if (name === 'demo') { demo.render(); demoBand.render(); }
   if (name === 'band') bandLab.render();
+  if (name === 'key') keyUi.render();
   if (name === 'vocab') vocab.render();
   if (name === 'copyhome') renderCopyCard();
   window.scrollTo(0, 0);
@@ -151,10 +155,13 @@ const demo = initDemo({
   },
 });
 const bandLab = initBandLab({ player, ensureAudio }); // ZB listening lab (development, coaches)
+// VK (0.11.0): telegraph key (experimental, coaches); 0.12.0 sending exercise from the receive level (≥ 10 characters)
+const keyUi = initKeyerUi({ player, ensureAudio, getChars: () => charsForLevel(Math.max(SEND_MIN_CHARS, lvl())) });
 const demoBand = initDemoBand({ player, ensureAudio }); // 0.9.9: band sample in the demo
 const vocab = initVocab({ sync, show: (n) => show(n), player, ensureAudio }); // 0.10.0: abbreviations, Q codes, prefixes
 
 document.addEventListener('keydown', (e) => {
+  if (view === 'key') { if (keyUi.onKey(e, true)) e.preventDefault(); return; }
   if (view === 'copy') { if (copyCtl.onKey(e)) e.preventDefault(); return; }
   if (view === 'head') { if (headCtl.onKey(e)) e.preventDefault(); return; }
   if (view === 'vocab') { if (vocab.onKey(e)) e.preventDefault(); return; }
@@ -165,6 +172,9 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { e.preventDefault(); pauseHandler?.(); return; }
   const ch = normalizeKey(e.key);
   if (ch) { e.preventDefault(); kbd.flash(ch); inputHandler?.(ch, e.timeStamp); }
+});
+document.addEventListener('keyup', (e) => {
+  if (view === 'key' && keyUi.onKey(e, false)) e.preventDefault(); // VK: paddle released
 });
 
 // ================= HOME =================
@@ -972,7 +982,7 @@ $('#extra-chars').addEventListener('change', (e) => { // 0.9.6: optional extensi
 });
 
 function initSteppers() {
-  for (const el of document.querySelectorAll('.stepper')) {
+  for (const el of document.querySelectorAll('.stepper[data-key]')) { // the key page has its own (keyerui.js)
     const d = el.dataset;
     const mk = (txt, label, dir) => {
       const b = document.createElement('button');
@@ -1089,7 +1099,9 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && view === 'entry') entryCtl.hold();
   if (document.visibilityState === 'hidden' && view === 'demo') { demo.stop(); demoBand.stop(); }
   if (document.visibilityState === 'hidden' && view === 'band') bandLab.stop();
-  player.keepAlive(document.visibilityState === 'visible' && ['lesson', 'intro', 'discrim', 'copy', 'head', 'entry'].includes(view));
+  if (document.visibilityState === 'hidden' && view === 'key') keyUi.stop(); // release paddles, silence
+  if (document.visibilityState === 'visible' && view === 'key') keyUi.render();
+  player.keepAlive(document.visibilityState === 'visible' && ['lesson', 'intro', 'discrim', 'copy', 'head', 'entry', 'key'].includes(view));
 });
 window.addEventListener('online', () => { backgroundSync(); vocab.flush(); });
 // 0.9.7 (Z-06): closing/reloading the page in the middle of a lesson – keep it as an aborted lesson (sent with the next sync)

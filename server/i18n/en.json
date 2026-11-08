@@ -17,6 +17,7 @@
  "err.pwChangeFirst": "Set a new password first.",
  "err.forbidden": "You are not allowed to do this.",
  "err.csrf": "Invalid CSRF token – reload the page.",
+ "err.busy": "The server is full right now ({n} people are training). Keep training – your results are saved as soon as there is room.",
  "err.tooManyLogins": "Too many failed attempts. Try again in 15 minutes.",
  "err.badLogin": "Wrong nickname or password.",
  "err.adminHomeOnly": "The administrator can log in only from the home network.",

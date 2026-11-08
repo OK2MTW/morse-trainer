@@ -3,13 +3,11 @@
 import json
 import re
 import secrets
-import threading
-import time
 from datetime import timedelta
 
 from flask import Blueprint, Response, g, jsonify, request
 
-from server import auth, i18n
+from server import admission, auth, i18n
 from server.auth import ROLE_ADMIN, ROLE_COACH, ROLE_STUDENT, iso, login_required, now, sha256
 from server import coach
 from server.coach import MODE_CHAR, MODE_COPY, MODE_HEAD
@@ -77,6 +75,10 @@ def login():
         return err(t("err.tooManyLogins"), 429)
     db = get_db()
     row = db.execute("SELECT * FROM users WHERE nick = ?", (nick,)).fetchone()
+    # Z-19: a full server refuses before argon2 (CPU); an unknown nick is checked as a newcomer (no nick probing)
+    if not admission.active.admit(row["id"] if row else None, row["role"] if row else None, auth.is_public(),
+                                  touch=False):
+        return admission.busy_response()
     ok, new_hash = auth.verify_password(row["pw_hash"] if row else None, pw)
     if not ok or row["disabled"]:
         auth.note_fail(*keys)
@@ -87,6 +89,7 @@ def login():
     if new_hash:
         db.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (new_hash, row["id"]))
     db.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (iso(now()), row["id"]))
+    admission.active.touch(row["id"], auth.is_public())
     resp = jsonify(user=user_json(row))
     csrf = auth.create_session(resp, row["id"], device_of(d.get("device")))
     resp.set_data(json.dumps({"user": user_json(row), "csrf": csrf}))
@@ -109,28 +112,13 @@ def news_seen():
     return jsonify(news_seen=seen)
 
 
-# Online users: who asked within the window (in memory only – one waitress process, nothing stored, lost on restart).
-# The app polls /online every ONLINE_POLL_S while visible, so a closed tab drops out after ONLINE_WINDOW_S.
-ONLINE_WINDOW_S = 180
-_online = {}
-_online_lock = threading.Lock()
-
-
-def online_count(uid, at=None):
-    """Mark uid as online now and return the number of distinct users seen within the window."""
-    at = time.monotonic() if at is None else at
-    with _online_lock:
-        _online[uid] = at
-        for k in [k for k, v in _online.items() if at - v > ONLINE_WINDOW_S]:
-            del _online[k]
-        return len(_online)
-
-
+# Online users = the register of active users of the admission control (Z-19, server/admission.py): anyone who sent an
+# API request within its window (in memory only, nothing stored). The app polls /online every 60 s while visible.
 @bp.get("/online")
 @login_required()
 def online():
     """0.9.6: number of users active right now (the badge on the user icon) – only a count, no names."""
-    return jsonify(online=online_count(g.user["id"]))
+    return jsonify(online=admission.active.counts()[0])
 
 
 @bp.post("/logout")
@@ -224,6 +212,8 @@ def register():
     ip = auth.client_net()
     if auth.too_many(f"inv:{ip}"):
         return err(t("err.tooManyAttempts"), 429)
+    if not admission.active.admit(None, None, auth.is_public(), touch=False):   # Z-19: before argon2
+        return admission.busy_response()
     db = get_db()
     inv = find_invite(d.get("token"))
     if inv is None or inv["reset_user"]:
@@ -249,6 +239,7 @@ def register():
         db.execute("ROLLBACK")
         raise
     row = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    admission.active.touch(uid, auth.is_public())
     resp = jsonify()
     csrf = auth.create_session(resp, uid, device_of(d.get("device")))
     resp.set_data(json.dumps({"user": user_json(row), "csrf": csrf}))
@@ -613,6 +604,7 @@ def clean_detail(det):
 
 
 LESSON_MODES = (MODE_CHAR, MODE_COPY, MODE_HEAD)   # 0.10.14: head copy (U6)
+TRACE_KEY = "klic"   # 0.12.3: tones keyed on the key page, sent on request for tuning the decoder (validation #31)
 HEAD_FIELDS = ("from", "to", "RST", "NAME", "QTH", "RIG", "PWR", "ANT", "WX", "TEMP")  # = web/js/head.js
 COPY_CONTENTS = ("groups", "pseudo", "words", "abbr", "calls", "long", "mix", "qso")  # M8 (U4); M9 (U5): qso
 COPY_FATIGUE_KINDS = {"acc", "miss"}  # M8: fatigue in copy behind – accuracy drop / losing the stream
@@ -762,7 +754,7 @@ def trace_post():
     kind = d.get("kind")
     at = d.get("at")
     lesson_id = d.get("lesson_id")
-    if (kind not in LESSON_MODES or not isinstance(at, str) or not 10 <= len(at) <= 40
+    if (kind not in (*LESSON_MODES, TRACE_KEY) or not isinstance(at, str) or not 10 <= len(at) <= 40
             or not isinstance(data, dict)
             or (lesson_id is not None and not (isinstance(lesson_id, str) and 8 <= len(lesson_id) <= 64))):
         return err(t("err.badTrace"))

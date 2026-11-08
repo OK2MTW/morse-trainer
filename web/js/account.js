@@ -2,7 +2,7 @@
 // M2 – login, registration from an invitation, the Account tab, management of invitations and users.
 import { t, fmtDate as fmtDateL, lang } from './i18n.js';
 import { otherSite } from './site.js';
-import { api, setCsrf, deviceKind, ApiError } from './api.js';
+import { api, setCsrf, deviceKind, ApiError, setBusyEndHandler } from './api.js';
 import { bindPasswordRules } from './pwrules.js';
 import { setTraceUser } from './trace.js';
 import { showNews } from './news.js';
@@ -51,7 +51,7 @@ async function getMe() {
     try {
       return await api('GET', '/me');
     } catch (e) {
-      if (!transient(e) || i >= 2) throw e;
+      if (!transient(e) || e.busy || i >= 2) throw e; // full server: wait (api.js), no quick retries
       await new Promise((r) => { setTimeout(r, 1500 * (i + 1)); });
     }
   }
@@ -84,7 +84,8 @@ export async function startAuth(showFn) {
         sync.canTrain = u.role !== ROLE_ADMIN;
         openUser(u.id);
         setNick(u.nick);
-        banner(e.offline ? t('auth.offline') : t('auth.serverBusy', { msg: e.message }), true);
+        // Z-19: a full server says so itself ("full, keep training…"), otherwise the general text
+        banner(e.offline ? t('auth.offline') : (e.busy && e.status === 503 ? e.message : t('auth.serverBusy', { msg: e.message })), true);
         const o = otherSite(); // 0.8.2: away from home offer the outside version (and vice versa)
         if (o) {
           const a = document.createElement('a');
@@ -169,6 +170,8 @@ export async function backgroundSync() {
     if (e.auth) sessionExpired();
   }
 }
+// Z-19: after the wait for a full server one attempt (refused again → api.js waits longer)
+setBusyEndHandler(() => { backgroundSync(); });
 
 // ================= login =================
 $('#form-login').addEventListener('submit', async (e) => {
