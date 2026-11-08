@@ -256,5 +256,17 @@
  "coach.head.nextEarly": "Zkušebně jen krok 1 (25 WPM bez rušení). Celý žebřík příjmu v hlavě se otevře v úrovni U5.",
  "coach.head.nextU6": "Krok úrovně U6 – po {n} sezeních ≥ {acc} % je hotová úroveň U5 a začíná U6 Mistr.",
  "coach.head.nextLast": "Poslední krok příjmu v hlavě – slouží k udržování.",
- "coach.head.nextLocked": "Další krok se otevře s vyšší úrovní; zatím tento krok upevňuj."
+ "coach.head.nextLocked": "Další krok se otevře s vyšší úrovní; zatím tento krok upevňuj.",
+ "cw.err.notFound": "Uživatel v místnosti není.",
+ "cw.err.noAccess": "CW místnost máš vypnutou.",
+ "cw.err.linkedSelf": "Už jsi ve spojení.",
+ "cw.err.busy": "Uživatel je právě ve spojení.",
+ "cw.err.notInRoom": "Uživatel teď nemá aplikaci otevřenou.",
+ "cw.err.noKnock": "Výzva už neplatí.",
+ "cw.err.notLinked": "Nejsi ve spojení.",
+ "cw.err.channelBusy": "Kanál je obsazený.",
+ "cw.err.badBatch": "Neplatná data klíčování.",
+ "err.groupNotFound": "Skupina neexistuje.",
+ "err.groupName": "Zadej název skupiny.",
+ "err.groupExists": "Skupina s tímto názvem už existuje."
 }

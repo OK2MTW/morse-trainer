@@ -16,6 +16,7 @@ export const NEWS = [
   { id: 7, version: '0.10.10', at: '2026-11-07T07:36:00Z', items: ['news.nav'] },
   { id: 8, version: '0.10.14', at: '2026-11-07T12:59:00Z', items: ['news.head'] },
   { id: 9, version: '0.10.16', at: '2026-11-07T13:21:00Z', items: ['news.entry'] },
+  { id: 10, version: '0.13.2', at: '2026-11-08T02:22:00Z', items: ['news.cwRoom'] },
 ];
 
 const LATEST = Math.max(0, ...NEWS.map((n) => n.id));

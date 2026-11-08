@@ -110,3 +110,5 @@ Python (PSF-2.0), OpenSSL (Apache-2.0), nginx (BSD-2-Clause). Přesné verze nai
 jsou v [sbom.cdx.json](sbom.cdx.json) (CycloneDX, `python -m tools.sbom --write`).
 Metodika inspirována projekty [LCWO.net](https://lcwo.net/), [morsecode.world](https://morsecode.world/),
 CWops CW Academy a Long Island CW Club.
+Slovník: zkratky a prefixy podle zkušebních otázek ČTÚ (06/2025), výběr Q-kódů a jejich významy podle
+[Q-kodexu Českého radioklubu](https://ceskyradioklub.cz/zaciname/q-kodex) – texty vlastními slovy.

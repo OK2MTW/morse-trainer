@@ -70,6 +70,7 @@ class VocabTest(unittest.TestCase):
         """0.10.6: CTU exam lists (classes A + N): forms of every item are valid, unique and contain the item code."""
         official = {k: [c for c in ITEMS[k] if (k, c) not in EXTRA] for k in ITEMS}
         self.assertEqual((len(official["abbr"]), len(official["q"]), len(official["pfx"])), (153, 25, 85))
+        self.assertEqual(len(ITEMS["q"]), 39)  # 0.13.7: Q-kodex of the Czech Radio Club
         self.assertTrue({("abbr", "TU"), ("abbr", "5NN"), ("q", "QRQ")} <= EXTRA)  # Martin 2026-11-07: extras back
         for k in ("abbr", "q"):
             seen = {}
@@ -81,9 +82,10 @@ class VocabTest(unittest.TestCase):
                     self.assertNotIn(f, seen, (f, code))
                     seen[f] = code
         self.assertEqual(ITEMS["abbr"]["TNX"][1], ["TNX", "TKS"])
-        self.assertEqual(ITEMS["q"]["QRO"][1], ["QRO?"])
+        self.assertEqual(ITEMS["q"]["QRO"][1], ["QRO", "QRO?"])
+        self.assertEqual(ITEMS["q"]["QST"][1], ["QST"])  # no question form
         cs = LANGS["cs"]
-        self.assertEqual(cs["vocab.q.QRM"], "Jsem rušen interferencí")
+        self.assertEqual(cs["vocab.q.QRM"], "Vaše vysílání ruší jiné stanice")
         self.assertEqual(cs["vocab.abbr.KN"], "přecházím na poslech pro určitou stanici")
         # no stale meanings of removed items
         for lang, d in LANGS.items():
@@ -91,6 +93,17 @@ class VocabTest(unittest.TestCase):
                 m = re.match(r"vocab\.(abbr|q|pfx)\.(.+)$", key)
                 if m:
                     self.assertIn(m.group(2), ITEMS[m.group(1)], (lang, key))
+
+    def test_q_questions(self):
+        """0.13.7: every Q code with a question form (QRO?) has a question meaning in every language, all distinct."""
+        for lang, d in LANGS.items():
+            want = {c for c, (show, quiz) in ITEMS["q"].items() if f"{c}?" in quiz}
+            have = {k[len("vocab.qq."):] for k in d if k.startswith("vocab.qq.")}
+            self.assertEqual(have, want, lang)
+            vals = [d[f"vocab.qq.{c}"] for c in want]
+            self.assertEqual(len(vals), len(set(vals)), lang)
+            self.assertTrue(all(v.rstrip(")").rstrip().endswith("?") for v in vals), lang)
+        self.assertIn("vocab.qq.", (WEB / "js" / "vocab.js").read_text())
 
 
     def test_quiz_sound(self):

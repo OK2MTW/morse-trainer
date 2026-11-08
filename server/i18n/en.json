@@ -248,5 +248,17 @@
  "coach.head.nextEarly": "As a trial only step 1 (25 WPM without interference). The whole head-copy ladder opens at level U5.",
  "coach.head.nextU6": "The U6 step – after {n} sessions ≥ {acc} % level U5 is done and U6 Master begins.",
  "coach.head.nextLast": "Last head-copy step – for maintenance.",
- "coach.head.nextLocked": "The next step opens with a higher level; consolidate this one for now."
+ "coach.head.nextLocked": "The next step opens with a higher level; consolidate this one for now.",
+ "cw.err.notFound": "The user is not in the room.",
+ "cw.err.noAccess": "The CW room is switched off for you.",
+ "cw.err.linkedSelf": "You are already connected.",
+ "cw.err.busy": "The user is in a connection right now.",
+ "cw.err.notInRoom": "The user does not have the app open now.",
+ "cw.err.noKnock": "The call is no longer valid.",
+ "cw.err.notLinked": "You are not connected.",
+ "cw.err.channelBusy": "The channel is busy.",
+ "cw.err.badBatch": "Invalid keying data.",
+ "err.groupNotFound": "The group does not exist.",
+ "err.groupName": "Enter the group name.",
+ "err.groupExists": "A group with this name already exists."
 }

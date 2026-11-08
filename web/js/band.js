@@ -401,3 +401,94 @@ export class BandSound {
     this.out = null;
   }
 }
+
+// 0.13.2 – CW room: a band that runs as long as the connection – noise / static / other stations in segments of
+// LIVE_SEG s (overlapping, so the noise does not dip), and the other station as one oscillator keyed by the received
+// time line. Only the listener's own choice shapes it (nothing is shared); the own sidetone does not go through it.
+const LIVE_SEG = 30;
+const LIVE_OVERLAP = 0.3;
+const LIVE_AHEAD = 5;        // s – the next segment is prepared this long before the current one ends
+
+export class LiveBand extends BandSound {
+  /** p = bandParams(...) with freq = the tone of the other station. Returns false when the audio is locked. */
+  start(p) {
+    if (!this.player.ready) return false;
+    this.stop();
+    const ctx = this.ctx;
+    this.p = p;
+    this.player.master.gain.setValueAtTime(this.player.settings.volume ?? 0.7, ctx.currentTime);
+    const t0 = ctx.currentTime + 0.05;
+    this.rx = this._receiver(p, t0);
+    const osc = this._track(ctx.createOscillator());
+    const key = this._track(ctx.createGain());
+    const fade = this._track(ctx.createGain());
+    const lvl = this._track(ctx.createGain());
+    osc.type = 'sine';
+    osc.frequency.value = p.freq;
+    key.gain.value = 0;
+    lvl.gain.value = SIGNAL;
+    fade.gain.value = 1 - p.qsb / 2;
+    osc.connect(key).connect(fade).connect(lvl).connect(this.rx);
+    if (p.qsb > 0) {
+      for (const [rate, share] of [[p.qsbRate, 0.7], [p.qsbRate * 0.37 + 0.013, 0.3]]) {
+        const lfo = this._track(ctx.createOscillator());
+        const depth = this._track(ctx.createGain());
+        lfo.frequency.value = rate;
+        depth.gain.value = (p.qsb / 2) * share;
+        lfo.connect(depth).connect(fade.gain);
+        lfo.start(t0);
+      }
+    }
+    osc.start(t0);
+    this.keyGain = key.gain;
+    this.segEnd = t0 + LIVE_OVERLAP;
+    this._segment();
+    return true;
+  }
+
+  _segment() {
+    if (!this.rx) return;
+    const ctx = this.ctx;
+    const from = Math.max(ctx.currentTime + 0.05, this.segEnd - LIVE_OVERLAP);
+    const to = from + LIVE_SEG;
+    const n0 = this.nodes.length;
+    this._background(this.rx, this.p, from, to, Math.random);
+    const seg = new Set(this.nodes.slice(n0));
+    this.segEnd = to;
+    // nodes of a finished segment are released (a connection may last long)
+    setTimeout(() => {
+      this.nodes = this.nodes.filter((n) => !seg.has(n));
+      seg.forEach((n) => { try { n.disconnect(); } catch (e) { /* already disconnected */ } });
+    }, (to - ctx.currentTime + 1) * 1000);
+    this.timer = setTimeout(() => this._segment(), Math.max(1, to - LIVE_AHEAD - ctx.currentTime) * 1000);
+  }
+
+  /** One element of the other station from t0 to t1 (audio-clock s). */
+  keyElement(t0, t1) {
+    if (!this.keyGain) return;
+    const now = this.ctx.currentTime;
+    const a = Math.max(t0, now + 0.002);
+    if (t1 - a < 0.005) return;
+    const r = Math.min(Math.max(0.0008, this.p.rise / 1000), (t1 - a) / 3);
+    const g = this.keyGain;
+    g.setValueAtTime(0, a);
+    g.linearRampToValueAtTime(1, a + r);
+    g.setValueAtTime(1, t1 - r);
+    g.linearRampToValueAtTime(0, t1);
+  }
+
+  /** Silences the other station at once (hang up, a lost race for the channel). */
+  silence() {
+    if (!this.keyGain) return;
+    const now = this.ctx.currentTime;
+    if (this.keyGain.cancelAndHoldAtTime) this.keyGain.cancelAndHoldAtTime(now);
+    else this.keyGain.cancelScheduledValues(now);
+    this.keyGain.setTargetAtTime(0, now, 0.003);
+  }
+
+  stop() {
+    super.stop();
+    this.rx = null;
+    this.keyGain = null;
+  }
+}

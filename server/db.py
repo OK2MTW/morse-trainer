@@ -160,6 +160,28 @@ MIGRATIONS = [
     );
     CREATE INDEX vocab_sessions_user_at ON vocab_sessions (user_id, at)
     """,
+    # 10 (0.13.0): trainer groups and the CW room – a trainer sorts students (and invitations) into groups; deleting
+    # a group keeps its students. The trainer switches the room off for a student (cw_off) and on for the children
+    # of their groups (cw_kids); blocks between users are permanent (nothing else of the room is stored)
+    """
+    CREATE TABLE coach_groups (
+        id         INTEGER PRIMARY KEY,
+        coach_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name       TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (coach_id, name)
+    );
+    ALTER TABLE users ADD COLUMN group_id INTEGER REFERENCES coach_groups(id) ON DELETE SET NULL;
+    ALTER TABLE invites ADD COLUMN group_id INTEGER REFERENCES coach_groups(id) ON DELETE SET NULL;
+    ALTER TABLE users ADD COLUMN cw_off INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN cw_kids INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE cw_blocks (
+        user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, blocked_id)
+    )
+    """,
 ]
 
 

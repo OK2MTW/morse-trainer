@@ -4,7 +4,7 @@
 import { t, fmtDate, locale } from './i18n.js';
 import { api } from './api.js';
 import {
-  VOCAB, VOCAB_ITEMS, VOCAB_LISTS, vocabLabel, vocabKey, vocabShown, vocabSorted, mastered, vocabWeight, VOCAB_RETRY_AFTER, VOCAB_RECENT,
+  VOCAB, VOCAB_ITEMS, VOCAB_LISTS, vocabLabel, vocabKey, vocabKeyFor, vocabKeys, vocabShown, vocabSorted, mastered, vocabWeight, VOCAB_RETRY_AFTER, VOCAB_RECENT,
   VOCAB_MASTER_N, VOCAB_MASTER_ACC, PROSIGNS, copyAbbrForms,
 } from './vocab.js';
 
@@ -142,14 +142,15 @@ export function initVocab({ sync, show, player = null, ensureAudio = null }) {
       b.addEventListener('click', () => { V.tab = k; renderOverview(); });
       tabs.append(b);
     }
-    $('#vocab-ov-hint').textContent = t('vocab.overviewHint', { n: VOCAB_MASTER_N, acc: Math.round(VOCAB_MASTER_ACC * 100) });
+    $('#vocab-ov-hint').textContent = t('vocab.overviewHint', { n: VOCAB_MASTER_N, acc: Math.round(VOCAB_MASTER_ACC * 100) })
+      + (V.tab === 'q' ? ` ${t('vocab.sourceQ')}` : '');
     const body = $('#vocab-table');
     body.textContent = '';
     for (const code of vocabSorted(V.tab, (c) => t(vocabKey(V.tab, c)), locale())) {
       const s = itemStat(V.tab, code);
       const tr = el('tr');
-      const meaning = el('td', null, t(vocabKey(V.tab, code)));
-      if (VOCAB_ITEMS[V.tab][code].extra) meaning.append(' ', el('small', 'muted', t('vocab.extra'))); // not in the CTU list
+      const meaning = el('td');
+      vocabKeys(V.tab, code).forEach((k, i) => { if (i) meaning.append(el('br')); meaning.append(t(k)); }); // 0.13.7: QRO / QRO?
       // #30: a long series of prefixes wraps after commas only; each part (LO-LW) stays together
       const codeTd = el('td', 'vocab-code');
       codeLabel(V.tab, code).split(', ').forEach((part, i) => {
@@ -178,9 +179,11 @@ export function initVocab({ sync, show, player = null, ensureAudio = null }) {
     return cand.at(-1);
   }
 
-  function options(item) {
-    const right = t(vocabKey(item.list, item.code));
-    const others = VOCAB[item.list].filter((c) => c !== item.code).map((c) => t(vocabKey(item.list, c)))
+  function options(item, shown) {
+    // 0.13.7: QRO? asks for the question, QRO for the statement; wrong answers of the same kind
+    const right = t(vocabKeyFor(item.list, item.code, shown));
+    const kind = (c) => item.list !== 'q' || !shown.endsWith('?') || VOCAB_ITEMS.q[c].quiz.includes(`${c}?`);
+    const others = VOCAB[item.list].filter((c) => c !== item.code && kind(c)).map((c) => t(vocabKeyFor(item.list, c, shown)))
       .filter((m, i, a) => m !== right && a.indexOf(m) === i);
     const opts = [right];
     while (opts.length < 3 && others.length) opts.push(others.splice(Math.floor(Math.random() * others.length), 1)[0]);
@@ -198,8 +201,8 @@ export function initVocab({ sync, show, player = null, ensureAudio = null }) {
     const item = pickItem();
     S.recent.push(`${item.list}:${item.code}`);
     if (S.recent.length > VOCAB_RECENT) S.recent.shift();
-    const { opts, right } = options(item);
     const shown = vocabShown(item.list, item.code); // one of the item's forms (TNX/TKS, QRO?, a prefix of the series)
+    const { opts, right } = options(item, shown);
     S.cur = { item, right, shown, answered: false };
     $('#vocab-q-label').textContent = t(item.list === 'pfx' ? 'vocab.questionPfx' : 'vocab.question');
     $('#vocab-q-list').textContent = t(`vocab.list.${item.list}`);
@@ -283,7 +286,7 @@ export function initVocab({ sync, show, player = null, ensureAudio = null }) {
     sum.append(el('p', 'hint', bad.length ? t('vocab.doneMistakes') : t('vocab.doneNone')));
     if (bad.length) {
       const ul = el('ul', 'vocab-mistakes');
-      for (const r of bad) ul.append(el('li', null, `${codeLabel(r.list, r.code)} – ${t(vocabKey(r.list, r.code))}`));
+      for (const r of bad) ul.append(el('li', null, `${codeLabel(r.list, r.code)} – ${vocabKeys(r.list, r.code).map(t).join(' / ')}`));
       sum.append(ul);
     }
     $('#vocab-offline').hidden = true;
@@ -334,10 +337,10 @@ export function initVocab({ sync, show, player = null, ensureAudio = null }) {
     const cols = el('div', 'vp-cols');
     for (const code of vocabSorted(list, (c) => t(vocabKey(list, c)), locale())) {
       const row = el('div', 'vp-row');
-      row.append(el('span', 'vp-code', codeLabel(list, code)), el('span', blank ? 'vp-blank' : 'vp-meaning', blank ? '' : t(vocabKey(list, code))));
+      row.append(el('span', 'vp-code', codeLabel(list, code)), el('span', blank ? 'vp-blank' : 'vp-meaning', blank ? '' : vocabKeys(list, code).map(t).join(' / ')));
       cols.append(row);
     }
-    host.append(cols, el('p', 'vp-foot', list === 'pfx' ? t('vocab.printFoot') : t('app.title')));
+    host.append(cols, el('p', 'vp-foot', list === 'pfx' ? t('vocab.printFoot') : list === 'q' ? `${t('app.title')} · ${t('vocab.sourceQ')}` : t('app.title')));
     document.body.classList.add('printing');
     // 0.10.3: "Save as PDF" names the file after the page title → the list, not the app
     const appTitle = document.title;

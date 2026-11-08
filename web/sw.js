@@ -4,12 +4,12 @@
 // The cache name carries a hash of all ASSETS (tests/swhash.py --write): any change of a file changes sw.js, the browser
 // installs the new set (bypassing the HTTP cache) and the page reloads outside a lesson (main.js, controllerchange).
 // tests/test_sw.py fails when the hash or the ASSETS list is out of date.
-const VERSION = '0.12.4';
-const ASSETS_HASH = '6805eb06';
+const VERSION = '0.13.9';
+const ASSETS_HASH = 'a73094f1';
 const CACHE = `morse-v${VERSION}-${ASSETS_HASH}`;
 const ASSETS = [
   '/', '/index.html', '/css/app.css', '/js/main.js', '/js/audio.js', '/js/keyboard.js', '/js/charset.js', '/js/drill.js', '/js/coach.js', '/js/storage.js',
-  '/js/api.js', '/js/account.js', '/js/stats.js', '/js/quiz.js', '/js/plan.js', '/js/dashboard.js',
+  '/js/api.js', '/js/account.js', '/js/usersui.js', '/js/cwroomui.js', '/js/cwchannel.js', '/js/cwlink.js', '/js/cwbell.js', '/js/stats.js', '/js/quiz.js', '/js/plan.js', '/js/dashboard.js',
   '/js/copy.js', '/js/content.js', '/js/words.js', '/js/site.js', '/site-config.js', '/js/pwrules.js', '/js/trace.js', '/js/copylesson.js', '/js/head.js', '/js/headlesson.js', '/js/entry.js', '/js/entrytest.js', '/js/demo.js', '/js/news.js', '/js/i18n.js', '/js/online.js', '/js/band.js', '/js/bandlab.js', '/js/demoband.js', '/js/vocab.js', '/js/vocabui.js', '/js/keyer.js', '/js/decoder.js', '/js/sendeval.js', '/js/keyerui.js', '/o-aplikaci.html',
   '/i18n/languages.json', '/i18n/cs.json', '/i18n/en.json',
   '/vendor/morse-pro/morse-pro.js', '/vendor/morse-pro/morse-pro-message.js',
@@ -20,10 +20,34 @@ const ASSETS = [
 const NETWORK_FIRST = new Set(['/site-config.js', '/manifest.webmanifest']);
 const CACHE_FIRST = new Set(ASSETS.filter((p) => !NETWORK_FIRST.has(p)));
 
+// 0.13.6: not cache.addAll – ~55 parallel requests hit the public nginx limit (5 r/s, burst 40); one 429 failed the
+// whole install and the browser stayed on the old version for ever. Now 4 at a time, a 429 waits and tries again.
+const INSTALL_PARALLEL = 4;
+const RETRY_429 = 8;
+
+async function fetchAsset(u) {
+  for (let i = 0; ; i++) {
+    const resp = await fetch(new Request(u, { cache: 'reload' }));
+    if (resp.ok) return resp;
+    if (resp.status !== 429 || i >= RETRY_429) throw new Error(`${u}: ${resp.status}`);
+    await new Promise((res) => setTimeout(res, 400 * (i + 1)));
+  }
+}
+
+async function installAll() {
+  const c = await caches.open(CACHE);
+  const queue = [...ASSETS];
+  const worker = async () => {
+    while (queue.length) {
+      const u = queue.shift();
+      await c.put(u, await fetchAsset(u));
+    }
+  };
+  await Promise.all(Array.from({ length: INSTALL_PARALLEL }, worker));
+}
+
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE)
-    .then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' }))))
-    .then(() => self.skipWaiting()));
+  e.waitUntil(installAll().then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {

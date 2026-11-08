@@ -21,6 +21,7 @@
       <!-- 0.10.10 (Martin): copy behind and vocabulary as own views next to Home; Progress in the user menu -->
       <button type="button" data-go="copyhome" class="training-only" data-i18n="nav.copy">Copy</button>
       <button type="button" data-go="vocab" class="training-only" data-i18n="nav.vocab">Abbrev.</button>
+      <button type="button" data-go="cw" class="member-only" data-i18n="nav.cw">CW Chat</button>
       <div class="usermenu">
         <button type="button" id="user-btn" class="avatar" aria-haspopup="true" aria-expanded="false"
           aria-controls="user-menu" title="Account and settings" data-i18n-attr="title:nav.accountSettings"><span id="user-initial">?</span><sub id="user-online" class="online" hidden></sub></button>
@@ -29,6 +30,7 @@
           <button type="button" data-go="stats" class="training-only" data-i18n="nav.stats">Progress</button>
           <button type="button" data-go="settings" data-i18n="nav.settings">Settings</button>
           <button type="button" data-go="account" data-i18n="nav.accountDevices">Account and devices</button>
+          <button type="button" data-go="users" class="staff-only" hidden data-i18n="nav.users">User management</button>
           <a href="/o-aplikaci.html" data-i18n="nav.about">About</a>
           <button type="button" id="menu-logout" data-i18n="nav.logout">Log out</button>
         </div>
@@ -490,7 +492,43 @@
           Deleting the account irreversibly removes the account and all data on the server.</p>
       </div>
 
-      <div id="admin" hidden>
+      <!-- 0.13.0: user management moved to its own view (user menu) -->
+      <div class="card staff-only" hidden>
+        <h2 data-i18n="users.manageTitle">User management</h2>
+        <p class="hint" data-i18n="users.manageHint">Users, groups, invitations and the CW room are now in their own page.</p>
+        <div class="buttons"><button type="button" data-go="users" data-i18n="users.manageOpen">Open user management</button></div>
+      </div>
+    </section>
+
+    <!-- ===== USER MANAGEMENT (0.13.0, coach + administrator) ===== -->
+    <section id="view-users" class="view" hidden>
+      <p id="users-offline" class="banner warn" hidden data-i18n="users.offline">User management needs a connection to the server.</p>
+      <div id="users-body">
+        <div class="card" id="users-card">
+          <h2 id="users-title" data-i18n="users.title">Users</h2>
+          <div class="form users-filter">
+            <label><span data-i18n="users.filterName">Search by name</span> <input id="users-filter" type="search" autocomplete="off"></label>
+            <label id="users-group-row" hidden><span data-i18n="users.group">Group</span> <select id="users-group"></select></label>
+          </div>
+          <p class="hint" id="users-count"></p>
+          <table class="list"><tbody id="users-list"></tbody></table>
+        </div>
+        <div class="card form coach-only" hidden>
+          <h2 data-i18n="users.cwTitle">CW room</h2>
+          <label class="check"><input type="checkbox" id="cw-kids"> <span><span data-i18n="users.cwKids">Room for children</span>
+            <small data-i18n="users.cwKidsHint">(students under 18 that you invited: they see their classmates of the same group and you; off by default)</small></span></label>
+          <p class="hint" data-i18n="users.cwHint">Under "Edit" you can switch the room off for a single student. Adults see adults and coaches, never children.</p>
+        </div>
+        <div class="card" id="groups-card">
+          <h2 data-i18n="groups.title">Groups</h2>
+          <form class="form coach-only" id="form-group" hidden>
+            <label><span data-i18n="groups.newName">New group</span> <input name="name" maxlength="40" required></label>
+            <p class="form-error" aria-live="polite"></p>
+            <button type="submit" data-i18n="groups.create">Create group</button>
+          </form>
+          <p class="hint" data-i18n="groups.hint">Deleting a group keeps its students, they only remain without a group.</p>
+          <table class="list"><tbody id="groups-list"></tbody></table>
+        </div>
         <form class="card form" id="form-invite">
           <h2 data-i18n="invite.title">Invite a new user</h2>
           <label><span data-i18n="invite.role">Role</span> <select name="role" id="inv-role">
@@ -498,6 +536,7 @@
             <option value="trener" data-i18n="role.trener">coach</option>
             <option value="admin" data-i18n="role.admin">administrator</option>
           </select></label>
+          <label id="inv-group-row" hidden><span data-i18n="users.group">Group</span> <select id="inv-group"></select></label>
           <label><span data-i18n="invite.note">For whom</span> <small data-i18n="invite.noteHint">(note, optional)</small> <input name="note" maxlength="60"></label>
           <p class="form-error" aria-live="polite"></p>
           <button type="submit" data-i18n="invite.submit">Create invitation</button>
@@ -514,9 +553,49 @@
           <h2 data-i18n="invite.list">Invitations</h2>
           <table class="list"><tbody id="inv-list"></tbody></table>
         </div>
-        <div class="card">
-          <h2 id="users-title" data-i18n="users.title">Users</h2>
-          <table class="list"><tbody id="users-list"></tbody></table>
+      </div>
+    </section>
+
+    <!-- ===== CW ROOM 1:1 (0.13.1) ===== -->
+    <section id="view-cw" class="view" hidden>
+      <div class="card">
+        <h2 data-i18n="cw.title">CW room</h2>
+        <p id="cw-error" class="hint warn" hidden aria-live="polite"></p>
+        <p id="cw-notice" class="cw-notice" hidden aria-live="polite"></p>
+        <div id="cw-noaccess" hidden><p id="cw-noaccess-text"></p></div>
+        <div id="cw-room" hidden>
+          <div id="cw-link" class="cw-link" hidden>
+            <p class="cw-link-head"><strong id="cw-link-who"></strong> <span id="cw-link-time" class="hint"></span></p>
+            <div id="cw-channel">
+              <p class="cw-state"><span id="cw-trx" class="cw-trx free" aria-live="polite"></span>
+                <span id="cw-busy" class="warn" hidden data-i18n="cw.channelBusy">Channel busy</span>
+                <small id="cw-delay" class="hint"></small></p>
+              <div class="key-paddles cw-paddles">
+                <button type="button" id="cw-dot" class="key-paddle" data-i18n="key.dot">· dot</button>
+                <button type="button" id="cw-dash" class="key-paddle" data-i18n="key.dash">– dash</button>
+              </div>
+              <ul id="cw-log" class="cw-log" hidden aria-live="polite"></ul>
+              <div class="cw-toggles">
+                <label class="check"><input type="checkbox" id="cw-show-tx"> <span data-i18n="cw.showTx">Transcript of my sending</span></label>
+                <label class="check"><input type="checkbox" id="cw-show-rx"> <span data-i18n="cw.showRx">Transcript of what I received (after each over)</span></label>
+              </div>
+              <p class="hint" data-i18n="cw.keyHint">Keyboard: left Ctrl = dot, right Ctrl = dash (keys as on the key page). Your over ends after a short silence; then the other station may answer.</p>
+              <details class="cw-settings">
+                <summary data-i18n="cw.settings">Key and band sound</summary>
+                <div class="form">
+                  <label><span data-i18n="key.type">Key type</span> <select id="cw-key-type"></select></label>
+                  <label><span data-i18n="key.wpm">Keyer speed</span> <input id="cw-key-wpm" type="number" step="1" inputmode="numeric"></label>
+                  <label><span data-i18n="cw.noiseLabel">Noise</span> <select id="cw-noise"></select></label>
+                  <label><span data-i18n="cw.presetLabel">Interference</span> <select id="cw-preset"></select></label>
+                  <p class="hint" data-i18n="cw.bandHint">Only you hear your choice; the other station chooses their own. A weak noise always stays.</p>
+                </div>
+              </details>
+            </div>
+            <div class="buttons"><button type="button" id="cw-hangup" class="danger" data-i18n="cw.hangup">End connection</button></div>
+          </div>
+          <ul id="cw-users" class="cw-users" aria-live="polite"></ul>
+          <details id="cw-blocked-box" class="cw-blocked" hidden><summary id="cw-blocked-sum"></summary><ul id="cw-blocked"></ul></details>
+          <p class="hint" data-i18n="cw.hint">Pick a user who is in the room (green) and knock. Once they accept, you are connected: like on the air, one sends, the other listens.</p>
         </div>
       </div>
     </section>

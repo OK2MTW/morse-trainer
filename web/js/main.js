@@ -23,7 +23,7 @@ import {
   confirmGate, sessionLoad, warmupStats, fatigueSignal, WARMUP_S, SESSION_END_MIN, DAY_WARN_MIN, FATIGUE_TTR,
   FatigueMonitor, PaceWatch, fatigueRef, lessonPace, SLOW_DAY, REWARM_PAUSE_MIN, REWARM_S, SESSION_BREAK_MIN,
 } from './coach.js';
-import { startAuth, renderAccount, backgroundSync, session } from './account.js';
+import { startAuth, renderAccount, backgroundSync, session, sessionExpired } from './account.js';
 import { deviceKind, DEVICE_MOBILE } from './api.js';
 import { initCopy } from './copylesson.js';
 import { initHead } from './headlesson.js';
@@ -31,6 +31,10 @@ import { initEntry } from './entrytest.js';
 import { initDemo } from './demo.js';
 import { initBandLab } from './bandlab.js';
 import { initKeyerUi } from './keyerui.js';
+import { renderUsers } from './usersui.js';
+import { initCwRoom } from './cwroomui.js';
+import { initCwBell } from './cwbell.js';
+import { initCwChannel } from './cwchannel.js';
 import { SEND_MIN_CHARS } from './sendeval.js';
 import { initDemoBand } from './demoband.js';
 import { initVocab } from './vocabui.js';
@@ -73,7 +77,8 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUserM
 $('#menu-logout').addEventListener('click', () => { closeUserMenu(); $('#acc-logout').click(); });
 
 // 0.9.7 (Z-08): new app version activated by the service worker → reload outside a lesson
-const UPDATE_SAFE_VIEWS = ['home', 'stats', 'copyhome', 'login', 'demo'];
+// 0.13.4: + management, account and settings (the administrator lands in User management and never saw Home)
+const UPDATE_SAFE_VIEWS = ['home', 'stats', 'copyhome', 'login', 'demo', 'users', 'account', 'settings'];
 const updateReload = { pending: false, done: false };
 function reloadForUpdate() {
   updateReload.done = true;
@@ -81,42 +86,68 @@ function reloadForUpdate() {
   location.reload();
 }
 
+// 0.13.9 (Martin): a reload (F5, pull to refresh in the PWA) stays on the page – the last restorable view of this
+// tab is kept in sessionStorage per user; lessons and results are not restored (a reload aborts the lesson → the page
+// the lesson started from). A new tab / app start opens Home as before.
+const RESTORE_VIEWS = ['home', 'copyhome', 'stats', 'vocab', 'account', 'users', 'cw', 'settings', 'band', 'key', 'demo'];
+const RESTORE_KEY = 'morse.view';
+function rememberView(name) {
+  if (!RESTORE_VIEWS.includes(name)) return;
+  try { sessionStorage.setItem(RESTORE_KEY, JSON.stringify({ u: session.user?.id ?? null, v: name })); } catch (e) { /* private mode */ }
+}
+function restoredView(fallback) {
+  try {
+    const r = JSON.parse(sessionStorage.getItem(RESTORE_KEY) || 'null');
+    if (r && RESTORE_VIEWS.includes(r.v) && r.u === (session.user?.id ?? null)) return r.v;
+  } catch (e) { /* private mode, damaged value */ }
+  return fallback;
+}
+
 function show(name) {
   if (!session.user && !PUBLIC_VIEWS.includes(name)) name = 'login';
   if (session.user?.pw_change) name = 'pwchange'; // E3: new password first
   const admin = session.user?.role === 'admin'; // the administrator only manages, does not train
-  if (admin && TRAINING_VIEWS.includes(name)) name = 'account';
+  const staff = admin || session.user?.role === 'trener';
+  if (admin && TRAINING_VIEWS.includes(name)) name = 'users'; // 0.13.0: management is the administrator's home
+  if (name === 'users' && !staff) name = 'account';
   const out = !session.user; // 0.9.2: logged out = tabs Log in / Try it (demo)
   $('.tabs [data-go="home"]').hidden = admin || out;
   for (const el of document.querySelectorAll('.training-only')) el.hidden = admin || out;
   for (const el of document.querySelectorAll('.public-only')) el.hidden = !out;
   const coach = session.user?.role === 'trener'; // ZB lab (development) – coaches only
   for (const el of document.querySelectorAll('.coach-only')) el.hidden = !coach;
+  for (const el of document.querySelectorAll('.staff-only')) el.hidden = !staff;
+  for (const el of document.querySelectorAll('.member-only')) el.hidden = out;
   if ((name === 'band' || name === 'key') && !coach) name = 'settings'; // VK (0.11.0): experimental, coaches
   $('.usermenu').hidden = out;
   if (view === 'demo' && name !== 'demo') { demo.stop(); demoBand.stop(); }
   if (view === 'band' && name !== 'band') bandLab.stop();
   if (view === 'key' && name !== 'key') keyUi.stop();
+  if (view === 'cw' && name !== 'cw') cwRoom.stop();
+  if (session.user && !session.user.pw_change && name !== 'cw') cwBell.start(); else cwBell.stop(); // 0.13.6
   if (view === 'vocab' && name !== 'vocab') vocab.stop();
   view = name;
+  rememberView(name); // before a possible update reload – the new version opens the same page
   if (updateReload.pending && !updateReload.done && UPDATE_SAFE_VIEWS.includes(name)) { reloadForUpdate(); return; }
   for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== `view-${name}`;
   const training = ['lesson', 'intro', 'discrim', 'copy', 'head', 'entry'].includes(name);
   $('#keyboard').hidden = !['lesson', 'discrim', 'copy', 'demo', 'entry'].includes(name);
-  player.keepAlive((training || name === 'key') && document.visibilityState === 'visible'); // 0.8.5: BT output must not fall asleep
+  player.keepAlive((training || name === 'key' || name === 'cw') && document.visibilityState === 'visible'); // 0.8.5: BT output must not fall asleep
   $('.tabs').hidden = training || name === 'pwchange' || (!session.user && !['login', 'demo'].includes(name));
   $('#user-btn').hidden = name === 'pwchange';
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.go === name);
-  $('#user-btn').classList.toggle('active', name === 'settings' || name === 'account' || name === 'stats');
+  $('#user-btn').classList.toggle('active', ['settings', 'account', 'stats', 'users'].includes(name));
   closeUserMenu();
   if (name === 'home') renderHome();
   if (name === 'settings') { renderSteppers(); refreshDiag(); }
   if (name === 'account') renderAccount();
+  if (name === 'users') renderUsers(session.user, session.offline);
   if (name === 'stats') { drawStats(); backgroundSync(); }
   if (name === 'quiz') openQuiz();
   if (name === 'demo') { demo.render(); demoBand.render(); }
   if (name === 'band') bandLab.render();
   if (name === 'key') keyUi.render();
+  if (name === 'cw') cwRoom.render();
   if (name === 'vocab') vocab.render();
   if (name === 'copyhome') renderCopyCard();
   window.scrollTo(0, 0);
@@ -157,11 +188,17 @@ const demo = initDemo({
 const bandLab = initBandLab({ player, ensureAudio }); // ZB listening lab (development, coaches)
 // VK (0.11.0): telegraph key (experimental, coaches); 0.12.0 sending exercise from the receive level (≥ 10 characters)
 const keyUi = initKeyerUi({ player, ensureAudio, getChars: () => charsForLevel(Math.max(SEND_MIN_CHARS, lvl())) });
+const cwLink = {}; // 0.13.2: the channel (keying, playback) – filled below, the room calls it on every poll
+const cwRoom = initCwRoom({ player, ensureAudio, onAuth: () => sessionExpired(), link: cwLink }); // 0.13.1
+// 0.13.6: who knocks while I am elsewhere in the app – no sound in a lesson or on a sound page
+const cwBell = initCwBell({ player, quiet: () => !UPDATE_SAFE_VIEWS.includes(view) || ['login', 'demo'].includes(view) });
+Object.assign(cwLink, initCwChannel({ player, ensureAudio, pollSoon: (ms) => cwRoom.pollSoon(ms) }));
 const demoBand = initDemoBand({ player, ensureAudio }); // 0.9.9: band sample in the demo
 const vocab = initVocab({ sync, show: (n) => show(n), player, ensureAudio }); // 0.10.0: abbreviations, Q codes, prefixes
 
 document.addEventListener('keydown', (e) => {
   if (view === 'key') { if (keyUi.onKey(e, true)) e.preventDefault(); return; }
+  if (view === 'cw') { if (cwLink.onKey(e, true)) e.preventDefault(); return; }
   if (view === 'copy') { if (copyCtl.onKey(e)) e.preventDefault(); return; }
   if (view === 'head') { if (headCtl.onKey(e)) e.preventDefault(); return; }
   if (view === 'vocab') { if (vocab.onKey(e)) e.preventDefault(); return; }
@@ -175,6 +212,7 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('keyup', (e) => {
   if (view === 'key' && keyUi.onKey(e, false)) e.preventDefault(); // VK: paddle released
+  if (view === 'cw' && cwLink.onKey(e, false)) e.preventDefault(); // 0.13.2: CW room key released
 });
 
 // ================= HOME =================
@@ -1101,7 +1139,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && view === 'band') bandLab.stop();
   if (document.visibilityState === 'hidden' && view === 'key') keyUi.stop(); // release paddles, silence
   if (document.visibilityState === 'visible' && view === 'key') keyUi.render();
-  player.keepAlive(document.visibilityState === 'visible' && ['lesson', 'intro', 'discrim', 'copy', 'head', 'entry', 'key'].includes(view));
+  player.keepAlive(document.visibilityState === 'visible' && ['lesson', 'intro', 'discrim', 'copy', 'head', 'entry', 'key', 'cw'].includes(view));
 });
 window.addEventListener('online', () => { backgroundSync(); vocab.flush(); });
 // 0.9.7 (Z-06): closing/reloading the page in the middle of a lesson – keep it as an aborted lesson (sent with the next sync)
@@ -1111,4 +1149,4 @@ setBeforeHide(() => {
   else if (headCtl.running) headCtl.abort();
 });
 
-startAuth(show).then((ok) => { if (ok) { applyAccountLang(); show('home'); } });
+startAuth(show).then((ok) => { if (ok) { applyAccountLang(); show(restoredView('home')); } });

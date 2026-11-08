@@ -60,11 +60,24 @@ export async function api(method, path, data) {
   if (!resp.ok) {
     const msg = json?.error || (resp.status === 429 ? t('api.tooMany') : t('api.serverError', { status: resp.status }));
     const isBusy = json?.busy === true && (resp.status === 503 || resp.status === 429);
-    if (isBusy) noteBusy(json.retry ?? resp.headers.get('Retry-After'), msg);
+    // 0.13.2: a limit hit by the CW room only slows the room down (cwroomui / cwchannel), never pauses the whole app
+    if (isBusy && !path.startsWith('/cw/')) noteBusy(json.retry ?? resp.headers.get('Retry-After'), msg);
     throw new ApiError(msg, resp.status, json?.auth === true, isBusy);
   }
   if (busy.step) { busy.step = 0; busy.until = 0; clearTimeout(busy.timer); busy.timer = null; } // room again
   return json;
+}
+
+/** 0.13.1: a fire-and-forget POST that survives closing the page (fetch keepalive, with the CSRF token). */
+export function beacon(path, data = {}) {
+  if (!csrf) return;
+  try {
+    fetch(`/api${path}`, {
+      method: 'POST', keepalive: true, credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'X-Lang': lang },
+      body: JSON.stringify(data),
+    }).catch(() => {});
+  } catch (e) { /* the page is going away – nothing to do */ }
 }
 
 // Device kind – stored value (lessons, sessions): 'mobil' = touch phone/tablet, 'pc' = computer.

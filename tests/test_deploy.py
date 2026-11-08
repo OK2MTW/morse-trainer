@@ -107,3 +107,18 @@ class OverloadGuardTest(unittest.TestCase):
         self.assertIn('record_deployed', inst)
         self.assertIn('install_unit morse-pinggy.service', inst)
         self.assertIn('record_deployed', (ROOT / 'deploy/pinggy-setup.sh').read_text(encoding='utf-8'))
+
+
+class CwZoneTest(unittest.TestCase):
+    """0.13.2: the CW room has its own nginx zones (LAN and outside), so its polling does not use up the API limit."""
+
+    def test_cw_locations_have_own_zones(self):
+        self.assertIn("zone=morse_cw:", NGINX)
+        self.assertIn("zone=morse_pub_cw:", NGINX)
+        self.assertIn("zone=morse_pub_cw_all:", NGINX)
+        blocks = re.findall(r"location /api/cw/ \{(.*?)\}", NGINX, re.S)
+        self.assertEqual(len(blocks), 2)
+        self.assertIn("zone=morse_cw ", blocks[0])
+        self.assertIn("zone=morse_pub_cw ", blocks[1])
+        self.assertTrue(all("morse_api" not in b and "morse_pub_api" not in b for b in blocks))
+

@@ -178,41 +178,53 @@ GUD | GUD | GUD | +
 PDL | PDL | PDL | +
 `;
 
+/*
+ * 0.13.7 (Martin 2026-11-08): Q codes – selection and meanings after the Q-kodex of the Czech Radio Club (CRK,
+ * https://ceskyradioklub.cz/zaciname/q-kodex), meanings in our own words (the page is CC BY-NC – facts only, no text).
+ * Every Q code has a statement (QRO = increase power, i18n vocab.q.<code>) and a question (QRO? = shall I increase
+ * power?, vocab.qq.<code>); the quiz shows one form and asks for its meaning. QST has no question. "+" = not in the
+ * CTU exam list (internal only – Martin 2026-11-08: no note in the UI).
+ */
 const Q_TABLE = `
-QRM | QRM | QRM
-QRO | QRO? | QRO?
-QRZ | QRZ | QRZ
-QRX | QRX | QRX
-QSB | QSB | QSB
-QRS | QRS | QRS
-QRT | QRT | QRT
-QRP | QRP | QRP
-QRV | QRV? | QRV?
-QRU | QRU | QRU
-QSL | QSL | QSL
-QRL | QRL? | QRL?
-QTH | QTH | QTH
-QRN | QRN? | QRN?
-QSO | QSO? | QSO?
-QSY | QSY? | QSY?
-QSV | QSV | QSV
-QSK | QSK? | QSK?
-QRJ | QRJ | QRJ
-QRK | QRK? | QRK?
-QSZ | QSZ | QSZ
-QSD | QSD | QSD
-QRG | QRG? | QRG?
-QZF | QZF | QZF
-QSX | QSX | QSX
-QRA | QRA | QRA | +
-QRH | QRH | QRH | +
-QRI | QRI | QRI | +
-QRQ | QRQ | QRQ | +
-QSA | QSA | QSA | +
-QSP | QSP | QSP | +
-QTR | QTR | QTR | +
-QRB | QRB | QRB | +
-QTC | QTC | QTC | +
+QRA | QRA, QRA? | QRA QRA? | +
+QRB | QRB, QRB? | QRB QRB? | +
+QRG | QRG, QRG? | QRG QRG?
+QRH | QRH, QRH? | QRH QRH? | +
+QRI | QRI, QRI? | QRI QRI? | +
+QRJ | QRJ, QRJ? | QRJ QRJ?
+QRK | QRK, QRK? | QRK QRK?
+QRL | QRL, QRL? | QRL QRL?
+QRM | QRM, QRM? | QRM QRM?
+QRN | QRN, QRN? | QRN QRN?
+QRO | QRO, QRO? | QRO QRO?
+QRP | QRP, QRP? | QRP QRP?
+QRQ | QRQ, QRQ? | QRQ QRQ? | +
+QRS | QRS, QRS? | QRS QRS?
+QRT | QRT, QRT? | QRT QRT?
+QRU | QRU, QRU? | QRU QRU?
+QRV | QRV, QRV? | QRV QRV?
+QRW | QRW, QRW? | QRW QRW? | +
+QRX | QRX, QRX? | QRX QRX?
+QRZ | QRZ, QRZ? | QRZ QRZ?
+QSA | QSA, QSA? | QSA QSA? | +
+QSB | QSB, QSB? | QSB QSB?
+QSD | QSD, QSD? | QSD QSD?
+QSG | QSG, QSG? | QSG QSG? | +
+QSK | QSK, QSK? | QSK QSK?
+QSL | QSL, QSL? | QSL QSL?
+QSM | QSM, QSM? | QSM QSM? | +
+QSN | QSN, QSN? | QSN QSN? | +
+QSO | QSO, QSO? | QSO QSO?
+QSP | QSP, QSP? | QSP QSP? | +
+QST | QST | QST | +
+QSV | QSV, QSV? | QSV QSV?
+QSX | QSX, QSX? | QSX QSX?
+QSY | QSY, QSY? | QSY QSY?
+QSZ | QSZ, QSZ? | QSZ QSZ?
+QTC | QTC, QTC? | QTC QTC? | +
+QTH | QTH, QTH? | QTH QTH?
+QTR | QTR, QTR? | QTR QTR? | +
+QZF | QZF, QZF? | QZF QZF?
 `;
 
 const PFX_TABLE = `
@@ -356,6 +368,14 @@ export function vocabSorted(list, meaning, locale) {
 
 /** Item {list, code}; its meaning is t(`vocab.${list}.${code}`). */
 export const vocabKey = (list, code) => `vocab.${list}.${code}`;
+
+/** 0.13.7: meaning of the shown form – a Q code with "?" (QRO?) means the question, vocab.qq.<code>. */
+export const vocabKeyFor = (list, code, shown) =>
+  (list === 'q' && String(shown).endsWith('?') ? `vocab.qq.${code}` : vocabKey(list, code));
+
+/** 0.13.7: keys of all meanings of an item (Q code: statement, then question) for the overview, print and mistakes. */
+export const vocabKeys = (list, code) =>
+  (list === 'q' ? VOCAB_ITEMS.q[code].quiz.map((f) => vocabKeyFor(list, code, f)) : [vocabKey(list, code)]);
 
 export const VOCAB_MASTER_N = 3;      // an item counts as mastered after ≥ 3 answers …
 export const VOCAB_MASTER_ACC = 0.8;  // … with ≥ 80 % right and the last answer right

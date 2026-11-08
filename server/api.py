@@ -11,6 +11,7 @@ from server import admission, auth, i18n
 from server.auth import ROLE_ADMIN, ROLE_COACH, ROLE_STUDENT, iso, login_required, now, sha256
 from server import coach
 from server.coach import MODE_CHAR, MODE_COPY, MODE_HEAD
+from server.cwroom import is_minor
 from server.db import get_db
 from server.i18n import t
 
@@ -233,6 +234,8 @@ def register():
             db.execute("ROLLBACK")
             return err(problem)
         db.execute("UPDATE invites SET used_by = ? WHERE id = ?", (uid, inv["id"]))
+        if inv["group_id"] is not None:  # 0.13.0: the invitation puts the student into the trainer's group
+            db.execute("UPDATE users SET group_id = ? WHERE id = ?", (inv["group_id"], uid))
         db.execute("UPDATE users SET last_login_at = created_at WHERE id = ?", (uid,))
         db.execute("COMMIT")
     except Exception:
@@ -327,11 +330,16 @@ def invite_create():
     days = d.get("days", INVITE_DAYS)
     days = days if isinstance(days, int) and 1 <= days <= 30 else INVITE_DAYS
     note = str(d.get("note", "")).strip()[:60] or None
+    group = d.get("group_id")
+    if group is not None:
+        if role != ROLE_STUDENT or own_group(get_db(), group) is None:
+            return err(t("err.groupNotFound"), 404)
     token = secrets.token_urlsafe(24)
     ts = now()
     cur = get_db().execute(
-        "INSERT INTO invites (token_hash, role, note, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?)",
-        (sha256(token), role, note, g.user["id"], iso(ts), iso(ts + timedelta(days=days))))
+        "INSERT INTO invites (token_hash, role, note, created_by, created_at, expires_at, group_id) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (sha256(token), role, note, g.user["id"], iso(ts), iso(ts + timedelta(days=days)), group))
     return jsonify(id=cur.lastrowid, token=token, role=role, expires_at=iso(ts + timedelta(days=days))), 201
 
 
@@ -339,8 +347,9 @@ def invite_create():
 @login_required(ROLE_ADMIN, ROLE_COACH)
 def invite_list():
     sql = ("SELECT i.id, i.role, i.note, i.created_at, i.expires_at, i.used_at, u.nick AS used_by_nick, "
-           "c.nick AS created_by_nick FROM invites i LEFT JOIN users u ON u.id = i.used_by "
-           "LEFT JOIN users c ON c.id = i.created_by")
+           "c.nick AS created_by_nick, i.group_id, gr.name AS group_name FROM invites i "
+           "LEFT JOIN users u ON u.id = i.used_by LEFT JOIN users c ON c.id = i.created_by "
+           "LEFT JOIN coach_groups gr ON gr.id = i.group_id")
     args = ()
     if g.user["role"] != ROLE_ADMIN:
         sql += " WHERE i.created_by = ?"
@@ -372,7 +381,8 @@ def invite_delete(inv_id):
 @bp.get("/users")
 @login_required(ROLE_ADMIN, ROLE_COACH)
 def users_list():
-    sql = ("SELECT u.id, u.nick, u.role, u.age_group, u.created_at, u.last_login_at, u.disabled, "
+    sql = ("SELECT u.id, u.nick, u.role, u.age_group, u.created_at, u.last_login_at, u.disabled, u.group_id, "
+           "u.cw_off, u.cw_kids, u.invited_by, (SELECT c.nick FROM users c WHERE c.id = u.invited_by) AS coach_nick, "
            "(SELECT COUNT(*) FROM lessons l WHERE l.user_id = u.id) AS lessons, "
            "(SELECT MAX(at) FROM lessons l WHERE l.user_id = u.id) AS last_lesson, "
            "(SELECT level FROM progress p WHERE p.user_id = u.id) AS level FROM users u")
@@ -380,7 +390,113 @@ def users_list():
     if g.user["role"] != ROLE_ADMIN:  # a coach sees only their own students
         sql += " WHERE u.invited_by = ?"
         args = (g.user["id"],)
-    return jsonify(users=[dict(r) for r in get_db().execute(sql + " ORDER BY u.nick", args)])
+    db = get_db()
+    users = []
+    for r in db.execute(sql + " ORDER BY u.nick COLLATE NOCASE", args):
+        x = dict(r)
+        x["minor"] = is_minor(x)  # 0.13.0: the room rules for children (shown in User management)
+        users.append(x)
+    kids = db.execute("SELECT cw_kids FROM users WHERE id = ?", (g.user["id"],)).fetchone()[0]
+    return jsonify(users=users, kids=bool(kids))
+
+
+
+# ================= trainer groups (0.13.0) =================
+GROUP_NAME_MAX = 40
+
+
+def own_group(db, gid):
+    """The group if it belongs to the logged-in trainer (an administrator manages all groups)."""
+    if not isinstance(gid, int) or isinstance(gid, bool):
+        return None
+    row = db.execute("SELECT * FROM coach_groups WHERE id = ?", (gid,)).fetchone()
+    if row is None or (g.user["role"] != ROLE_ADMIN and row["coach_id"] != g.user["id"]):
+        return None
+    return row
+
+
+def group_name(d):
+    name = " ".join(str(d.get("name", "")).split())[:GROUP_NAME_MAX]
+    return name or None
+
+
+@bp.get("/groups")
+@login_required(ROLE_ADMIN, ROLE_COACH)
+def groups_list():
+    sql = ("SELECT gr.id, gr.name, gr.coach_id, (SELECT COUNT(*) FROM users u WHERE u.group_id = gr.id) AS members "
+           "FROM coach_groups gr")
+    args = ()
+    if g.user["role"] != ROLE_ADMIN:
+        sql += " WHERE gr.coach_id = ?"
+        args = (g.user["id"],)
+    return jsonify(groups=[dict(r) for r in get_db().execute(sql + " ORDER BY gr.name COLLATE NOCASE", args)])
+
+
+@bp.post("/groups")
+@login_required(ROLE_COACH)
+def group_create():
+    name = group_name(body())
+    if not name:
+        return err(t("err.groupName"))
+    db = get_db()
+    if db.execute("SELECT 1 FROM coach_groups WHERE coach_id = ? AND name = ?", (g.user["id"], name)).fetchone():
+        return err(t("err.groupExists"), 409)
+    cur = db.execute("INSERT INTO coach_groups (coach_id, name, created_at) VALUES (?,?,?)",
+                     (g.user["id"], name, iso(now())))
+    return jsonify(id=cur.lastrowid, name=name), 201
+
+
+@bp.patch("/groups/<int:gid>")
+@login_required(ROLE_ADMIN, ROLE_COACH)
+def group_rename(gid):
+    db = get_db()
+    row = own_group(db, gid)
+    name = group_name(body())
+    if row is None:
+        return err(t("err.groupNotFound"), 404)
+    if not name:
+        return err(t("err.groupName"))
+    if db.execute("SELECT 1 FROM coach_groups WHERE coach_id = ? AND name = ? AND id != ?",
+                  (row["coach_id"], name, gid)).fetchone():
+        return err(t("err.groupExists"), 409)
+    db.execute("UPDATE coach_groups SET name = ? WHERE id = ?", (name, gid))
+    return jsonify(ok=True)
+
+
+@bp.delete("/groups/<int:gid>")
+@login_required(ROLE_ADMIN, ROLE_COACH)
+def group_delete(gid):
+    """Deletes only the group – its students and invitations stay (group_id → NULL)."""
+    db = get_db()
+    if own_group(db, gid) is None:
+        return err(t("err.groupNotFound"), 404)
+    db.execute("DELETE FROM coach_groups WHERE id = ?", (gid,))
+    cw_room_changed()
+    return jsonify(ok=True)
+
+
+@bp.put("/users/<int:uid>/group")
+@login_required(ROLE_ADMIN, ROLE_COACH)
+def user_group(uid):
+    """Puts a student into a group of their trainer (group_id null = out of every group)."""
+    db = get_db()
+    row = db.execute("SELECT role, invited_by FROM users WHERE id = ?", (uid,)).fetchone()
+    if row is None or row["role"] != ROLE_STUDENT or (g.user["role"] != ROLE_ADMIN
+                                                      and row["invited_by"] != g.user["id"]):
+        return err(t("err.userNotFound"), 404)
+    gid = body().get("group_id")
+    if gid is not None:
+        grp = own_group(db, gid)
+        if grp is None or grp["coach_id"] != row["invited_by"]:  # only a group of the student's own trainer
+            return err(t("err.groupNotFound"), 404)
+    db.execute("UPDATE users SET group_id = ? WHERE id = ?", (gid, uid))
+    cw_room_changed()
+    return jsonify(ok=True)
+
+
+def cw_room_changed():
+    from server.cw import room  # late import: server.cw imports nothing from here, but keep the module order free
+    room.invalidate()
 
 
 def admins_left(db, except_id):
@@ -402,8 +518,10 @@ def user_update(uid):
         if d["role"] not in auth.ROLES:
             return err(t("err.unknownRole"))
         db.execute("UPDATE users SET role = ? WHERE id = ?", (d["role"], uid))
+        cw_room_changed()
     if "disabled" in d:
         db.execute("UPDATE users SET disabled = ? WHERE id = ?", (1 if d["disabled"] else 0, uid))
+        cw_room_changed()
         if d["disabled"]:
             db.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
     return jsonify(ok=True)

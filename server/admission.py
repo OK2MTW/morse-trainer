@@ -55,6 +55,13 @@ class Register:
             self._prune(at)
             return len(self._seen), sum(1 for _ts, p in self._seen.values() if p)
 
+    def seen(self, uid, at=None):
+        """CW room (0.13.0): was the user active in the app within the window?"""
+        at = time.monotonic() if at is None else at
+        with self._lock:
+            v = self._seen.get(uid)
+            return v is not None and at - v[0] <= self.window
+
     def touch(self, uid, public, at=None):
         at = time.monotonic() if at is None else at
         with self._lock:

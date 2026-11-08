@@ -7,11 +7,12 @@ from flask import Flask, g, jsonify, request, send_from_directory
 
 from server import admission, auth, db, site
 from server.api import bp as api_bp
+from server.cw import bp as cw_bp
 from server.i18n import current as current_lang, t
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
-VERSION = "0.12.4"
+VERSION = "0.13.9"
 # Addresses of a particular installation are not in the code (E3): server/site.py ← /etc/morse-trainer/site.env
 HOME_URL, PUBLIC_URL, PUBLIC_HOSTS = site.HOME_URL, site.PUBLIC_URL, site.PUBLIC_HOSTS
 
@@ -19,6 +20,7 @@ app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
 db.init_app(app)
 app.register_blueprint(api_bp)
+app.register_blueprint(cw_bp)
 
 
 # Z-19 (0.10.19): requests that never wait for a free place (log out, report a client error, health)

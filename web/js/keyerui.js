@@ -85,6 +85,10 @@ function load() {
   } catch (e) { return { ...DEFAULTS }; }
 }
 function save(cfg) { try { localStorage.setItem(STORE, JSON.stringify(cfg)); } catch (e) { /* private mode */ } }
+/** 0.13.2: the CW room uses the same key settings (type, tempo, keys) as the key page. */
+export const loadKeyConfig = load;
+export const saveKeyConfig = save;
+export { UI_TYPES as KEY_UI_TYPES };
 
 export function initKeyerUi({ player, ensureAudio, getChars }) {
   const cfg = load();

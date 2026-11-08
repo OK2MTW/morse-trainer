@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-// M2 – login, registration from an invitation, the Account tab, management of invitations and users.
+// M2 – login, registration from an invitation, the Account tab (management of users moved to usersui.js in 0.13.0).
 import { t, fmtDate as fmtDateL, lang } from './i18n.js';
 import { otherSite } from './site.js';
 import { api, setCsrf, deviceKind, ApiError, setBusyEndHandler } from './api.js';
@@ -266,15 +266,6 @@ export function renderAccount() {
     row.append(th, td); tb.append(row);
   }
   $('#acc-training').hidden = u.role === ROLE_ADMIN || session.offline;
-  const staff = u.role === ROLE_ADMIN || u.role === ROLE_COACH;
-  $('#admin').hidden = !staff || session.offline;
-  if (staff && !session.offline) {
-    for (const o of $('#inv-role').options) o.hidden = u.role !== ROLE_ADMIN && o.value !== ROLE_STUDENT;
-    if (u.role !== ROLE_ADMIN) $('#inv-role').value = ROLE_STUDENT;
-    $('#users-title').textContent = u.role === ROLE_ADMIN ? t('users.title') : t('users.myStudents');
-    loadInvites();
-    loadUsers();
-  }
 }
 
 $('#acc-sync').addEventListener('click', async () => {
@@ -415,119 +406,3 @@ $('#acc-reset').addEventListener('click', async () => {
     window.scrollTo(0, 0);
   } catch (e) { alert(e.message); }
 });
-
-// ================= invitations =================
-$('#form-invite').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const f = e.target;
-  formError(f, '');
-  busy(f, true);
-  try {
-    const r = await api('POST', '/invites', { role: $('#inv-role').value, note: f.note.value.trim() });
-    $('#inv-link').value = `${location.origin}/#pozvanka=${r.token}`; // stored link format, old clients understand it
-    $('#inv-hint').textContent = t('invite.linkHint');
-    $('#inv-result').hidden = false;
-    $('#inv-share').hidden = !navigator.share;
-    f.note.value = '';
-    loadInvites();
-  } catch (err) { formError(f, err.message); } finally { busy(f, false); }
-});
-
-$('#inv-copy').addEventListener('click', async () => {
-  const inp = $('#inv-link');
-  try {
-    await navigator.clipboard.writeText(inp.value);
-    $('#inv-copy').textContent = t('invite.copied');
-  } catch (e) {
-    inp.select(); // older browser – selects the text for manual copying
-  }
-  setTimeout(() => { $('#inv-copy').textContent = t('invite.copy'); }, 2000);
-});
-$('#inv-share').addEventListener('click', () => {
-  navigator.share?.({ title: t('invite.shareTitle'), text: t('invite.shareText'), url: $('#inv-link').value })
-    .catch(() => {});
-});
-
-function cell(row, text, small) {
-  const td = document.createElement('td');
-  td.textContent = text;
-  if (small) { const s = document.createElement('small'); s.textContent = small; td.append(s); }
-  row.append(td);
-  return td;
-}
-
-function button(text, onClick) {
-  const b = document.createElement('button');
-  b.type = 'button'; b.textContent = text;
-  b.addEventListener('click', onClick);
-  return b;
-}
-
-async function loadInvites() {
-  const tb = $('#inv-list');
-  try {
-    const { invites } = await api('GET', '/invites');
-    tb.textContent = '';
-    if (!invites.length) { cell(tb.insertRow(), t('invite.none')); return; }
-    for (const i of invites) {
-      const row = tb.insertRow();
-      cell(row, `${roleName(i.role)}${i.note ? ` – ${i.note}` : ''}`, t('invite.created', { at: fmtDate(i.created_at) }));
-      cell(row, t(`invite.state.${i.state}`), i.used_by_nick ? `→ ${i.used_by_nick}` : (i.state === 'valid' ? t('invite.until', { at: fmtDate(i.expires_at) }) : ''));
-      const td = cell(row, '');
-      if (i.state === 'valid') {
-        td.append(button(t('invite.revoke'), async () => {
-          try { await api('DELETE', `/invites/${i.id}`); } catch (e) { alert(e.message); }
-          loadInvites();
-        }));
-      }
-    }
-  } catch (e) { tb.textContent = ''; cell(tb.insertRow(), e.message); }
-}
-
-async function loadUsers() {
-  const tb = $('#users-list');
-  try {
-    const { users } = await api('GET', '/users');
-    tb.textContent = '';
-    if (!users.length) { cell(tb.insertRow(), t('users.none')); return; }
-    const admin = session.user.role === ROLE_ADMIN;
-    for (const u of users) {
-      const row = tb.insertRow();
-      cell(row, u.nick + (u.disabled ? ` ${t('users.blockedMark')}` : ''), `${roleName(u.role)} · ${u.age_group ? ageName(u.age_group) : t('users.ageUnknown')}`);
-      cell(row, t('users.levelLessons', { level: u.level || 2, n: u.lessons }), t('users.last', { at: fmtDate(u.last_lesson) }));
-      const td = cell(row, '');
-      if (u.id !== session.user.id) {
-        td.append(button(t('users.resetLink'), async () => {
-          if (!confirm(t('users.resetLinkConfirm', { nick: u.nick }))) return;
-          try {
-            const r = await api('POST', `/users/${u.id}/password-link`);
-            $('#inv-link').value = `${location.origin}/#heslo=${r.token}`; // stored link format
-            $('#inv-hint').textContent = t('users.resetLinkHint', { nick: u.nick });
-            $('#inv-result').hidden = false;
-            $('#inv-share').hidden = !navigator.share;
-            $('#inv-result').scrollIntoView({ block: 'center' });
-            loadInvites();
-          } catch (e) { alert(e.message); }
-        }));
-      }
-      if (u.role !== ROLE_ADMIN && u.lessons + (u.level ? 1 : 0) > 0) {
-        td.append(button(t('users.resetTraining'), async () => {
-          if (!confirm(t('users.resetTrainingConfirm', { nick: u.nick }))) return;
-          try { await api('POST', `/users/${u.id}/reset-training`); } catch (e) { alert(e.message); }
-          loadUsers();
-        }));
-      }
-      if (admin && u.id !== session.user.id) {
-        const sel = document.createElement('select');
-        for (const v of [ROLE_ADMIN, ROLE_COACH, ROLE_STUDENT]) sel.add(new Option(roleName(v), v, false, v === u.role));
-        sel.addEventListener('change', () => patchUser(u.id, { role: sel.value }));
-        td.append(sel, button(u.disabled ? t('users.unblock') : t('users.block'), () => patchUser(u.id, { disabled: !u.disabled })));
-      }
-    }
-  } catch (e) { tb.textContent = ''; cell(tb.insertRow(), e.message); }
-}
-
-async function patchUser(id, data) {
-  try { await api('PATCH', `/users/${id}`, data); } catch (e) { alert(e.message); }
-  loadUsers();
-}
