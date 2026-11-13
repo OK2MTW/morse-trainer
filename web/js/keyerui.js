@@ -12,10 +12,13 @@ import { logSummary, KEYLOG_MAX } from './keylog.js';
 import { traceOn, traceBegin, traceEnd, flushTrace } from './trace.js';
 import {
   sendMetrics, focusOf, evaluateSending, sessionSummary, sendTask, EVAL_WINDOW, SEND_KINDS, SEND_TASKS,
-  SEND_END_MS, SEND_END_UNITS,
+  SEND_END_MS, SEND_END_UNITS, handHabits, qsoReady,
 } from './sendeval.js';
+import { api } from './api.js';
 
 const STORE = 'morse-key';
+const SEND_QUEUE = 'morse-send-q';  // 0.17.0: finished sending lessons not yet on the server (offline)
+const SEND_QUEUE_MAX = 20;
 // 0.14.0 (spec A-04, docs/hw/klic-rozhrani.md): a HW keyer with USB – the key forms the elements and plays the
 // sidetone; the app reads one stream key (key down = tone on), decodes with machine timing, does not run its keyer.
 // Mode C adds the paddle states as Left / Right Ctrl – only logged (Z-24 later), they do not key anything.
@@ -91,7 +94,14 @@ function save(cfg) { try { localStorage.setItem(STORE, JSON.stringify(cfg)); } c
 /** 0.13.2: the CW room uses the same key settings (stream key, sidetone) as the key page. */
 export const loadKeyConfig = load;
 
-export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {} }) {
+function readQueue() {
+  try { const q = JSON.parse(localStorage.getItem(SEND_QUEUE) || '[]'); return Array.isArray(q) ? q : []; } catch (e) { return []; }
+}
+function writeQueue(q) {
+  try { localStorage.setItem(SEND_QUEUE, JSON.stringify(q.slice(-SEND_QUEUE_MAX))); } catch (e) { /* private mode */ }
+}
+
+export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}, sync = null }) {
   const cfg = load();
   const S = {
     elements: [], learn: null, learnTimer: null, log: [], t0: null, prev: null, presses: 0, manual: null, open: false,
@@ -157,7 +167,75 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
 
   // ---------- sending exercise (D3 step 3, 0.12.0): task → sending → evaluation; a series of SEND_TASKS ----------
   // Nothing goes to the server (that comes with D4, mode `vysilani`). Characters of the receive level.
-  const X = { on: false, phase: null, target: '', tones: [], results: [], timer: null };
+  const X = { on: false, phase: null, target: '', tones: [], results: [], timer: null, lesson: null, saved: null };
+  // 0.17.0 D4: sending lessons – the step comes from the server (GET /api/send), a finished lesson is posted there
+  const L = { data: null, loading: false, err: false };
+
+  const kindNow = () => X.lesson || cfg.exKind;
+
+  async function sendLoad(force = false) {
+    if (L.loading || (L.data && !force)) return;
+    L.loading = true;
+    try {
+      await sendFlush();
+      L.data = await api('GET', '/send');
+      L.err = false;
+    } catch (e) { L.err = true; }
+    L.loading = false;
+    renderLesson();
+  }
+
+  /** Posts the queued lessons; the reply carries the new state. */
+  async function sendFlush() {
+    const q = readQueue();
+    if (!q.length) return null;
+    const r = await api('POST', '/send', { lessons: q, epoch: sync?.epoch });
+    const done = new Set(r.saved || []);
+    writeQueue(readQueue().filter((x) => !done.has(x.id) && !q.some((y) => y.id === x.id)));
+    L.data = r;
+    return r;
+  }
+
+  function lessonRecord(sum) {
+    const m = sum.metrics;
+    const v = (k) => (m[k] ? Math.round(m[k].v * 100) / 100 : null);
+    return {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      at: new Date().toISOString(), step: X.lesson, tasks: sum.tasks, acc: Math.round(sum.acc.v * 1000) / 1000,
+      wpm: m.effWpm ? Math.round(m.effWpm * 10) / 10 : null,
+      detail: { ratio: v('ratio'), inGap: v('inGap'), charGap: v('charGap'), wordGap: v('wordGap'),
+        stability: v('stability'), focus: focusOf(m, sum).key, habits: handHabits(m, sum).map((h) => h.key),
+        conf: sum.conf.map((c) => `${c.want}>${c.got}`), fixes: sum.fixes },
+    };
+  }
+
+  async function lessonSave(sum) {
+    const before = L.data?.state?.step;
+    writeQueue([...readQueue(), lessonRecord(sum)]);
+    X.saved = 'saving';
+    renderEx();
+    try {
+      const r = await sendFlush();
+      X.saved = r && r.state.step !== before ? 'up' : 'ok';
+    } catch (e) { X.saved = 'queued'; }
+    renderEx();
+    renderLesson();
+  }
+
+  function renderLesson() {
+    const st = L.data?.state;
+    $('#send-lesson-start').disabled = !st;
+    if (!st) {
+      $('#send-lesson-state').textContent = L.err ? t('send.lesson.offline') : '';
+      $('#send-lesson-hint').textContent = '';
+      return;
+    }
+    $('#send-lesson-state').textContent = t('send.lesson.state', {
+      step: t(`send.step.${st.step}`), i: st.index + 1, n: 4, k: st.streak, need: st.need,
+    });
+    $('#send-lesson-hint').textContent = st.step === 'qso' && !qsoReady(getChars())
+      ? t('send.lesson.qsoWait') : t(`send.lesson.about.${st.step}`);
+  }
 
   function exTone(tone) {
     X.tones.push(tone);
@@ -168,14 +246,16 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
   }
 
   function exNewTask() {
-    X.target = sendTask(cfg.exKind, getChars(), Math.random, cfg.exKind === 'char' ? X.target : null);
+    X.target = sendTask(kindNow(), getChars(), Math.random, kindNow() === 'char' ? X.target : null);
     X.tones = [];
     X.phase = 'send';
     renderEx();
   }
 
-  function exStart() {
+  function exStart(lesson = false) {
     releaseAll();
+    X.lesson = lesson && L.data?.state ? L.data.state.step : null;
+    X.saved = null;
     X.on = true;
     X.results = [];
     X.target = '';
@@ -211,7 +291,12 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
 
   function exNext() {
     if (X.phase !== 'result') return;
-    if (X.results.length >= SEND_TASKS) { X.phase = 'summary'; renderEx(); return; }
+    if (X.results.length >= SEND_TASKS) {
+      X.phase = 'summary';
+      renderEx();
+      if (X.lesson) lessonSave(sessionSummary(X.results));
+      return;
+    }
     exNewTask();
   }
 
@@ -285,7 +370,9 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
       res.append(reviewRows(ev), evBox);
     } else {
       const sum = sessionSummary(X.results);
-      $('#send-ex-progress').textContent = t('send.ex.summary', { n: sum.tasks });
+      $('#send-ex-progress').textContent = t(X.lesson ? 'send.lesson.summary' : 'send.ex.summary', {
+        n: sum.tasks, step: X.lesson ? t(`send.step.${X.lesson}`) : '',
+      });
       $('#send-ex-target').textContent = '';
       $('#send-ex-hint').textContent = t('send.ex.summaryHint');
       res.hidden = false;
@@ -299,6 +386,19 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
         p.textContent = t('send.ex.conf', {
           list: sum.conf.map((c) => `${c.want} (${c.wantCode}) → ${c.got} (${c.gotCode}) ${c.n}×`).join(', '),
         });
+        res.append(p);
+      }
+      // Z-24: habits of the hand (bands are an estimate, tuned from data)
+      for (const h of handHabits(sum.metrics, sum)) {
+        const p = document.createElement('p');
+        p.className = 'hint';
+        p.textContent = t(`send.habit.${h.key}`);
+        res.append(p);
+      }
+      if (X.lesson && X.saved) {
+        const p = document.createElement('p');
+        p.textContent = X.saved === 'up' ? t('send.lesson.up', { step: t(`send.step.${L.data.state.step}`) })
+          : t(`send.lesson.saved.${X.saved}`, { k: L.data?.state?.streak ?? 0, need: L.data?.state?.need ?? 2 });
         res.append(p);
       }
     }
@@ -484,8 +584,9 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
 
   // ---------- controls ----------
   $('#send-ex-kind').addEventListener('change', (e) => { cfg.exKind = e.target.value; save(cfg); });
-  $('#send-ex-start').addEventListener('click', () => { if (!player.ready) ensureAudio(); exStart(); });
-  $('#send-ex-again').addEventListener('click', exStart);
+  $('#send-ex-start').addEventListener('click', () => { if (!player.ready) ensureAudio(); exStart(false); });
+  $('#send-ex-again').addEventListener('click', () => exStart(!!X.lesson));
+  $('#send-lesson-start').addEventListener('click', () => { if (!player.ready) ensureAudio(); exStart(true); });
   $('#send-ex-done').addEventListener('click', exFinish);
   $('#send-ex-next').addEventListener('click', exNext);
   $('#send-ex-stop').addEventListener('click', exStop);
@@ -572,6 +673,8 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
       renderEx();
       renderNoKey();
       $('#key-rec').hidden = !traceOn();
+      renderLesson();
+      sendLoad(true);
     },
     stop() {
       S.open = false;

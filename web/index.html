@@ -111,6 +111,17 @@
           Forgotten password: ask an administrator or coach for a new-password link (your training stays).</p>
         <label class="lang-pick"><span data-i18n="settings.language">Language</span> <select class="lang-select"></select></label>
       </form>
+      <details class="card login-ca" id="login-ca" hidden>
+        <summary data-i18n="ca.title">Certificate of the home network</summary>
+        <p class="hint" data-i18n="ca.why">To install the app in the home network, the phone must trust the certificate of this installation (once).</p>
+        <p><a href="/ca.crt" download data-i18n="ca.download">Download the certificate</a></p>
+        <ol class="hint">
+          <li data-i18n="ca.step1">Android: Settings, Security (and privacy), More security settings, Encryption and credentials.</li>
+          <li data-i18n="ca.step2">Install a certificate, CA certificate, confirm the warning and pick the downloaded file. A screen lock is needed.</li>
+          <li data-i18n="ca.step3">Close Chrome completely, open this address again and install the app from the menu.</li>
+        </ol>
+        <p class="hint" data-i18n="ca.familyLink">Family Link (a child's phone): a parent may block installing certificates. Then use the address outside the home network – it works there without a certificate.</p>
+      </details>
     </section>
 
     <!-- ===== REGISTRATION FROM AN INVITATION ===== -->
@@ -607,11 +618,13 @@
               <label><span data-i18n="vo.fw">Longer gaps (Farnsworth)</span> <select id="cw-vo-fw"></select></label>
               <label><span data-i18n="vo.show">Text of the operator</span> <select id="cw-vo-show"></select></label>
               <label><span data-i18n="cw.presetLabel">Interference</span> <select id="cw-vo-preset"></select></label>
+              <label id="cw-vo-keytempo-row" class="fw-midi-row" hidden><input type="checkbox" id="cw-vo-keytempo"> <span data-i18n="vo.keyTempo">My QRS / QRQ changes the speed of my key too (USB MIDI)</span></label>
+              <p id="cw-vo-keytempo-hint" class="hint" data-i18n="vo.keyTempoHint" hidden>The key slows down or speeds up by the same step as the operator. The KEY button on the key has priority. After the QSO the key goes back to its speed.</p>
               <div class="buttons"><button type="button" id="cw-vo-start" data-i18n="vo.start">Start the QSO</button>
                 <button type="button" id="cw-vo-close" data-i18n="vo.close">Back to the room</button></div>
             </div>
             <div id="cw-vo-run" hidden>
-              <p class="cw-state"><span id="cw-vo-trx" class="cw-trx free" aria-live="polite"></span> <small id="cw-vo-wpm-now" class="hint"></small></p>
+              <p class="cw-state"><span id="cw-vo-trx" class="cw-trx free" aria-live="polite"></span> <small id="cw-vo-wpm-now" class="hint"></small> <small id="cw-vo-key-msg" class="hint" aria-live="polite"></small></p>
               <p id="cw-vo-nokey" class="hint warn" data-i18n="cw.noKey">Connect the HW key CwKey (USB) to send – without it you only listen. More on the Key page.</p>
               <ul id="cw-vo-log" class="cw-log" hidden aria-live="polite"></ul>
               <p class="hint" id="cw-vo-heard" aria-live="polite"></p>
@@ -728,6 +741,11 @@
         </div>
         <div class="send-ex">
           <div id="send-ex-ctl">
+            <div id="send-lesson" class="send-lesson">
+              <p><strong data-i18n="send.lesson.title">Sending lesson</strong> <span id="send-lesson-state" class="hint"></span></p>
+              <p class="hint" id="send-lesson-hint"></p>
+              <button type="button" id="send-lesson-start" data-i18n="send.lesson.start" disabled>Start the lesson</button>
+            </div>
             <label class="band-slider"><span data-i18n="send.ex.kindLabel">Sending exercise</span> <select id="send-ex-kind"></select></label>
             <p class="hint" id="send-ex-intro"></p>
             <button type="button" id="send-ex-start" data-i18n="send.ex.start">Start the exercise</button>

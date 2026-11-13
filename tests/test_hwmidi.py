@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """0.16.2 USB MIDI settings channel of CwKey (tests/hwmidi.py = port of web/js/hwmidi.js): frames, 14-bit numbers,
 decoding of the key's answers, ranges, the firmware offer with the version read from the key."""
+import re
 import unittest
 
 from tests import hwmidi as M
@@ -27,7 +28,7 @@ class TestHwMidi(unittest.TestCase):
                      'return deviceVersion || writtenHere || null;',
                      "if (!Number.isInteger(value) || value < s[2] || value > s[3]) throw new Error('range');",
                      "version: `${p[1]}.${p[2]}.${p[3]}`, chip: CHIPS[p[4]] ?? null,",
-                     "if (d.type === 'changed') { this.onChanged?.(d); return; }",
+                     "this.onChanged?.(d);",
                      "this.access = await navigator.requestMIDIAccess({ sysex: true });"):
             self.assertIn(frag, M.HWMIDI_JS)
 
@@ -124,6 +125,49 @@ class TestHwMidi(unittest.TestCase):
         self.assertIsNone(M.chip_target(rel, None))
         self.assertIsNone(M.chip_target(rel, 'F446'))
         self.assertIsNone(M.chip_target(None, 'F411'))
+
+    def test_key_tempo_follows_qrs_qrq(self):
+        self.assertEqual((C := M.C)['KEY_WPM_ID'], 0x01)
+        self.assertEqual((C['KEY_WPM_MIN'], C['KEY_WPM_MAX']), (5, 60))
+        vo = (M.HWMIDI_JS.split('import')[0], open(M.Path(M.__file__).parent.parent / 'web/js/vo.js').read())
+        step = int(re.search(r'export const VO_QRS = (\d+);', vo[1]).group(1))
+        k = M.KeyTempo(step)
+        self.assertIsNone(k.request(-1))            # speed unknown → nothing
+        k.known(20)
+        self.assertEqual(k.request(-1), 20 - step)  # QRS: the same step as the VO
+        k.sent(20 - step)
+        self.assertEqual(k.restore_to(), 20)
+        self.assertEqual(k.request(1), 20)
+        k.sent(20)
+        self.assertIsNone(k.restore_to())           # back at the original → nothing to restore
+        k.known(33)                                 # a later read never replaces the original
+        self.assertEqual(k.orig, 20)
+
+    def test_key_button_has_priority(self):
+        k = M.KeyTempo(4)
+        k.known(22)
+        k.sent(k.request(-1))
+        k.changed(30)                               # the KEY button (cycles 20/30/…)
+        self.assertIsNone(k.restore_to())           # the hand chose last → stays
+        self.assertEqual(k.request(-1), 26)         # the next QRS rules again, from the key's speed
+        k.sent(26)
+        self.assertEqual(k.restore_to(), 22)
+
+    def test_key_tempo_limits(self):
+        k = M.KeyTempo(4)
+        k.known(6)
+        self.assertEqual(k.request(-1), 5)
+        k.sent(5)
+        self.assertIsNone(k.request(-1))            # at the limit → no SET
+        k = M.KeyTempo(4)
+        k.known(58)
+        self.assertEqual(k.request(1), 60)
+        self.assertEqual(k.request(1), 60)          # still pending (not acknowledged) → the same speed again
+
+    def test_js_fragments_of_key_tempo(self):
+        for frag in ('export class KeyTempo', 'restoreTo()', "this.pending ?? this.wpm", 'export function sharedMidi()',
+                     'async get(id)', 'listen(l)'):
+            self.assertIn(frag, M.HWMIDI_JS)
 
 
 if __name__ == '__main__':

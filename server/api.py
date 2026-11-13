@@ -9,7 +9,7 @@ from flask import Blueprint, Response, g, jsonify, request, send_file
 
 from server import admission, auth, i18n
 from server.auth import ROLE_ADMIN, ROLE_COACH, ROLE_STUDENT, iso, login_required, now, sha256
-from server import coach, firmware, visits
+from server import coach, firmware, sending, visits
 from server.coach import MODE_CHAR, MODE_COPY, MODE_HEAD
 from server.cwroom import is_minor
 from server.db import get_db
@@ -618,6 +618,7 @@ def reset_training(db, uid):
     db.execute("DELETE FROM progress WHERE user_id = ?", (uid,))
     db.execute("DELETE FROM vocab WHERE user_id = ?", (uid,))  # 0.10.0: vocabulary is part of the training
     db.execute("DELETE FROM vocab_sessions WHERE user_id = ?", (uid,))
+    db.execute("DELETE FROM send_lessons WHERE user_id = ?", (uid,))  # 0.17.0: sending lessons too
     db.execute("UPDATE users SET train_epoch = train_epoch + 1 WHERE id = ?", (uid,))
     # the questionnaire (preferences) stays like settings, the reached level goes back to U1
     db.execute("UPDATE coach SET ulevel = 1, ulevel_at = NULL WHERE user_id = ?", (uid,))
@@ -636,12 +637,18 @@ def stale():
     return t("err.stale")
 
 
-def load_user_data(db, uid, limit=MAX_LESSONS_RETURNED, detail=False):
+def load_user_data(db, uid, limit=MAX_LESSONS_RETURNED, detail=False, after=None):
+    """after (Z-20, 0.17.1) = the server sequence of the last lesson the client has → only newer ones ("partial")."""
     s = db.execute("SELECT data, updated_at FROM settings WHERE user_id = ?", (uid,)).fetchone()
     p = db.execute("SELECT level, introduced, updated_at FROM progress WHERE user_id = ?", (uid,)).fetchone()
-    lessons = db.execute(
-        "SELECT client_id AS id, at, device, mode, level, dur_s AS durS, trials, correct, acc, ttr, wpm, fwpm, detail "
-        "FROM (SELECT * FROM lessons WHERE user_id = ? ORDER BY at DESC LIMIT ?) ORDER BY at", (uid, limit)).fetchall()
+    cols = "client_id AS id, at, device, mode, level, dur_s AS durS, trials, correct, acc, ttr, wpm, fwpm, detail"
+    if after is None:
+        lessons = db.execute(f"SELECT {cols} FROM (SELECT * FROM lessons WHERE user_id = ? ORDER BY at DESC LIMIT ?) "
+                             "ORDER BY at", (uid, limit)).fetchall()
+    else:
+        lessons = db.execute(f"SELECT {cols} FROM lessons WHERE user_id = ? AND id > ? ORDER BY at LIMIT ?",
+                             (uid, after, limit)).fetchall()
+    seq = db.execute("SELECT MAX(id) FROM lessons WHERE user_id = ?", (uid,)).fetchone()[0] or 0
     out_lessons = []
     for r in lessons:
         x = dict(r)
@@ -658,13 +665,17 @@ def load_user_data(db, uid, limit=MAX_LESSONS_RETURNED, detail=False):
         "progress": ({"level": p["level"], "introduced": json.loads(p["introduced"]), "updated_at": p["updated_at"]}
                      if p else None),
         "lessons": out_lessons,
+        "seq": seq,
+        **({"partial": True} if after is not None else {}),
     }
 
 
 @bp.get("/data")
 @login_required()
 def data_get():
-    return jsonify(load_user_data(get_db(), g.user["id"]))
+    a = request.args.get("after", "")
+    after = int(a) if a.isdigit() and len(a) <= 12 else None
+    return jsonify(load_user_data(get_db(), g.user["id"], after=after))
 
 
 @bp.put("/settings")
@@ -1128,7 +1139,36 @@ def coach_info(db, uid):
 @bp.get("/coach")
 @login_required(ROLE_COACH, ROLE_STUDENT)
 def coach_get():
-    return jsonify(coach_info(get_db(), g.user["id"]))
+    db = get_db()
+    uid = g.user["id"]
+    key = coach_signature(db, uid)
+    hit = _COACH_CACHE.get(uid)
+    if hit and hit[0] == key:
+        return jsonify(hit[1])
+    c = coach_info(db, uid)
+    _COACH_CACHE.pop(uid, None)
+    _COACH_CACHE[uid] = (key, c)
+    while len(_COACH_CACHE) > COACH_CACHE_MAX:
+        _COACH_CACHE.pop(next(iter(_COACH_CACHE)))
+    return jsonify(c)
+
+
+# Z-20 (0.17.1): /api/coach is linear in the history – the result is kept per user until any of its inputs changes
+# (lessons, progress, the coach row, settings, the reset counter, the language) or the hour turns (the dashboard
+# counts days). The signature is read before computing, so a result that wrote a change (pace, level) is never reused.
+COACH_CACHE_MAX = 200
+_COACH_CACHE = {}
+
+
+def coach_signature(db, uid):
+    les = db.execute("SELECT COUNT(*), MAX(id), MAX(at) FROM lessons WHERE user_id = ?", (uid,)).fetchone()
+    pro = db.execute("SELECT level, introduced, updated_at FROM progress WHERE user_id = ?", (uid,)).fetchone()
+    co = db.execute("SELECT archetype, modifiers, prefs, answered_at, ulevel, ulevel_at, updated_at FROM coach "
+                    "WHERE user_id = ?", (uid,)).fetchone()
+    st = db.execute("SELECT data, updated_at FROM settings WHERE user_id = ?", (uid,)).fetchone()
+    ep = db.execute("SELECT train_epoch FROM users WHERE id = ?", (uid,)).fetchone()
+    return (tuple(les), tuple(pro) if pro else None, tuple(co) if co else None, tuple(st) if st else None,
+            ep[0] if ep else None, i18n.current(), now().strftime("%Y-%m-%dT%H"))
 
 
 # ================= training reset =================
@@ -1237,6 +1277,49 @@ def vocab_post():
     return jsonify(saved=saved)
 
 
+# ================= sending lessons (0.17.0, D4 / A-15) =================
+@bp.get("/send")
+@login_required(ROLE_COACH, ROLE_STUDENT)
+def send_get():
+    if not g.user["key_lab"]:
+        return err(t("err.forbidden"), 403)
+    return jsonify(sending.send_data(get_db(), g.user["id"]))
+
+
+@bp.post("/send")
+@login_required(ROLE_COACH, ROLE_STUDENT)
+def send_post():
+    """Finished sending lessons {lessons: [{id, at, step, tasks, acc, wpm, detail}], epoch} → the saved ids and the
+    new state. Sending again is harmless (client id)."""
+    if not g.user["key_lab"]:
+        return err(t("err.forbidden"), 403)
+    d = body()
+    sent = d.get("lessons")
+    if not isinstance(sent, list) or len(sent) > 50:
+        return err(t("err.sendList"), 400)
+    db = get_db()
+    uid = g.user["id"]
+    if stale_epoch(db, uid, d.get("epoch")):
+        return err(stale(), 409)
+    saved = []
+    db.execute("BEGIN")
+    try:
+        for s in sent:
+            row = sending.clean_lesson(s, num)
+            if not row:
+                continue
+            cid, at, step, tasks, acc, wpm, detail = row
+            at = at if isinstance(at, str) and len(at) <= 40 else iso(now())
+            db.execute("INSERT OR IGNORE INTO send_lessons (user_id, client_id, mode, at, step, tasks, acc, wpm, detail) "
+                       "VALUES (?,?,?,?,?,?,?,?,?)", (uid, cid, sending.MODE_SEND, at, step, tasks, acc, wpm, detail))
+            saved.append(cid)
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+    return jsonify(saved=saved, **sending.send_data(db, uid))
+
+
 @bp.get("/export")
 @login_required()
 def export():
@@ -1253,6 +1336,7 @@ def export():
         "coach": coach_row(db, g.user["id"]),
         "vocab": vocab_data(db, g.user["id"], sessions=1_000_000),
         "cw": cw_export(db, g.user["id"]),
+        "send": sending.send_data(db, g.user["id"], limit=1_000_000),
     }
     traces = db.execute("SELECT lesson_id, kind, at, data FROM traces WHERE user_id = ? ORDER BY at",
                         (g.user["id"],)).fetchall()

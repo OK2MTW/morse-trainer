@@ -269,5 +269,6 @@
  "err.groupNotFound": "Skupina neexistuje.",
  "err.groupName": "Zadej název skupiny.",
  "err.groupExists": "Skupina s tímto názvem už existuje.",
- "err.fwNotFound": "Soubor firmwaru nebyl nalezen."
+ "err.fwNotFound": "Soubor firmwaru nebyl nalezen.",
+ "err.sendList": "Očekávám seznam lekcí vysílání (max. 50)."
 }

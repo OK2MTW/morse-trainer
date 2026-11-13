@@ -391,6 +391,8 @@ table.weeks tr.current td { font-weight: 600; }
 .key-text { font-family: monospace; font-size: 1.4rem; min-height: 1.6em; word-break: break-word; margin: 8px 0 2px; }
 .key-codes { font-family: monospace; word-break: break-word; }
 .send-ex { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 8px; }
+.send-lesson { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
+.send-lesson p { margin: 4px 0; }
 .send-ex-target { font-family: ui-monospace, "DejaVu Sans Mono", monospace; font-size: 2.2rem; font-weight: 700;
   letter-spacing: .15em; text-align: center; margin: 6px 0; min-height: 1.2em; word-break: break-all; }
 .send-metrics { list-style: none; padding: 0; margin: 6px 0; }
@@ -462,3 +464,5 @@ details.user-edit summary { cursor: pointer; color: var(--accent); font-size: .8
   border-radius: 50%; background: #d33; animation: cw-bell 1s ease-in-out infinite; }
 @keyframes cw-bell { 50% { transform: scale(1.5); opacity: .6; } }
 @media (prefers-reduced-motion: reduce) { .tabs [data-go="cw"].knocking::after { animation: none; } }
+.login-ca summary { cursor: pointer; font-weight: 600; }
+.login-ca ol { padding-left: 1.2em; }

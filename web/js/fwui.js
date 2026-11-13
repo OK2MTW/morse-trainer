@@ -11,21 +11,16 @@
 import { api } from './api.js';
 import { t, fmtDate } from './i18n.js';
 import { checkUf2, parseInfo, pickTarget, sha256Hex } from './uf2.js';
-import { HwMidi, offerUpdate, chipTarget } from './hwmidi.js';
+import { HwMidi, offerUpdate, chipTarget, sharedMidi, midiSwitchOn, saveMidiSwitch } from './hwmidi.js';
 
 const STORE = 'morse.fw.installed';
-const MIDI_STORE = 'morse.fw.midi';
 const $ = (sel) => document.querySelector(sel);
 
 function readInstalled() {
   try { return JSON.parse(localStorage.getItem(STORE) || 'null'); } catch (e) { return null; }
 }
-function midiOn() {
-  try { return localStorage.getItem(MIDI_STORE) === '1'; } catch (e) { return false; }
-}
-function saveMidiOn(on) {
-  try { localStorage.setItem(MIDI_STORE, on ? '1' : '0'); } catch (e) { /* private */ }
-}
+const midiOn = midiSwitchOn;
+const saveMidiOn = saveMidiSwitch;
 function saveInstalled(version, mcu) {
   try { localStorage.setItem(STORE, JSON.stringify({ version, mcu, at: Date.now() })); } catch (e) { /* private */ }
 }
@@ -180,7 +175,7 @@ export function initFwUi() {
   async function midiConnect() {
     if (!HwMidi.supported()) { midiMsg('fw.midi.unsupported'); return; }
     if (!S.midi) {
-      S.midi = new HwMidi();
+      S.midi = sharedMidi();
     }
     S.midi.onPorts = (on) => {
       if (on) setTimeout(readDev, 300); // the key came back (e.g. after a write) – let its USB settle

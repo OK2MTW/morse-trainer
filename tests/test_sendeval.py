@@ -97,7 +97,7 @@ class SendEvalTest(unittest.TestCase):
         self.assertEqual((ev['acc']['del'], ev['acc']['st']), (4, 'bad'))
 
     def test_exercise_constants(self):
-        self.assertEqual(E.SEND_KINDS, ['char', 'group', 'word'])
+        self.assertEqual(E.SEND_KINDS, ['char', 'group', 'word', 'qso'])
         self.assertEqual((E.SEND_TASKS, E.SEND_MIN_CHARS, E.SEND_GROUP_LEN), (10, 10, 5))
         self.assertEqual((E.SEND_END_MS, E.SEND_END_UNITS), (2000, 7))
         for frag in ("import { pools, word, SHARE_LETTERS, SHARE_DIGITS } from './content.js';",
@@ -146,6 +146,52 @@ class SendEvalTest(unittest.TestCase):
         self.assertIsNone(m['charGap'])
         self.assertIsNone(m['stability'])
         self.assertEqual(E.focus_of(m)['key'], 'good')
+
+    def test_qso_step(self):
+        rng = random.Random(3).random
+        koch = list('KMURESNAPTLWI.JZ=FOY,VG5/Q92H38B?47C1D60X')
+        self.assertFalse(E.qso_ready(list('KMURESNAPT')))
+        self.assertTrue(E.qso_ready(koch))
+        self.assertEqual(E.SEND_STEPS, ['char', 'group', 'word', 'qso'])
+        self.assertEqual((E.SEND_PASS_ACC, E.SEND_PASS_N), (0.9, 2))
+        for _ in range(200):
+            line = E.send_task('qso', koch, rng)
+            self.assertTrue(set(line.replace(' ', '')) <= set(koch), line)
+            self.assertNotIn('{', line)
+            w = E.send_task('qso', list('KMURESNAPT'), rng)     # not ready → a word of the known letters
+            self.assertTrue(set(w) <= set('KMURESNAPT'), w)
+        self.assertRegex(E.qso_call(rng), r'^[A-Z0-9]{1,2}[0-9][A-Z]{2,3}$')
+
+    def test_one_element(self):
+        self.assertTrue(E.one_element('-.-.', '-.-..'))
+        self.assertTrue(E.one_element('--.-', '-.-'))
+        self.assertFalse(E.one_element('.-', '-.'))
+        self.assertFalse(E.one_element('', '.'))
+
+    def test_hand_habits(self):
+        m = {'charGap': {'v': 3.0}, 'wordGap': {'v': 7.0}}
+        self.assertEqual(E.hand_habits(m), [])
+        m = {'charGap': {'v': 5.0}, 'wordGap': {'v': 6.0}}
+        self.assertEqual([h['key'] for h in E.hand_habits(m)], ['wordShort', 'charLong'])
+        ev = {'subs': [{'wantCode': '-.-.', 'gotCode': '-.-..'}, {'wantCode': '--.-', 'gotCode': '--.--'},
+                       {'wantCode': '.', 'gotCode': '-'}]}
+        self.assertEqual(E.hand_habits({}, ev), [{'key': 'paddle', 'v': 2}])
+        for frag in ('export function handHabits(metrics, ev = null)', 'if (n >= HABIT_PADDLE_N)',
+                     "if (kind === 'qso') return qsoReady(chars) ? qsoLine(rng) : word(chars, rng);"):
+            self.assertIn(frag, E.SENDEVAL_JS)
+
+    def test_hand_habits_on_martins_hw_recordings(self):
+        import json
+        from tests.test_decoder import ROOT
+        recs = json.loads((ROOT / 'tests/data/key_recordings_hw.json').read_text())['recordings']
+        found = set()
+        for r in recs:
+            tones = [{'start': a, 'end': b} for a, b in r['tones']]
+            dec = D.decode_tones(tones, r.get('wpm', 20), MORSE, {'machine': True})
+            ev = E.evaluate_sending(r['meant'], dec['tones'], dec, MORSE)
+            found |= {h['key'] for h in E.hand_habits(ev['metrics'], ev)}
+        # Martin 2026-11-13: long gaps between characters and an unreliable paddle return – both must be named
+        self.assertIn('charLong', found)
 
 
 if __name__ == '__main__':

@@ -21,7 +21,15 @@ export const EVAL_CV_OK = 0.25;
 export const EVAL_ACC_GOOD = 0.9;        // correctness ≥ 90 % good, ≥ 75 % ok
 export const EVAL_ACC_OK = 0.75;
 // D3 step 3 (0.12.0): the sending exercise on the key page (nothing goes to the server – that comes with D4)
-export const SEND_KINDS = ['char', 'group', 'word'];   // stored in the device settings, not translated
+export const SEND_KINDS = ['char', 'group', 'word', 'qso'];   // stored in the device settings, not translated
+// 0.17.0 D4 sending lessons (A-15): the steps of the ladder and the progress rule (server/sending.py checks the same)
+export const SEND_STEPS = ['char', 'group', 'word', 'qso'];
+export const SEND_PASS_ACC = 0.9;       // a lesson passes with correctness ≥ 90 % …
+export const SEND_PASS_N = 2;           // … two in a row on the current step = the next step
+// Z-24 habits of the hand – bands are an estimate only, to be tuned from data (tests/data/key_recordings_hw.json)
+export const HABIT_WORD_RATIO = 1.7;    // word gap / character gap below this = word gaps too short (norm 7/3 = 2.33)
+export const HABIT_CHAR_LONG = 4;       // character gaps longer than 4 dots
+export const HABIT_PADDLE_N = 2;        // ≥ 2 characters with one element more / less = probably the paddle
 export const SEND_TASKS = 10;           // tasks in one series
 export const SEND_MIN_CHARS = 10;       // characters of the receive level, at least the first 10 in Koch order
 export const SEND_GROUP_LEN = 5;        // a group of 5 characters
@@ -190,6 +198,62 @@ export function focusOf(metrics, ev = null) {
 
 const pick = (arr, rng) => arr[Math.floor(rng() * arr.length)];
 
+// 0.17.0: sentences of a QSO (step 'qso') – needs all letters and digits in receiving, else words are sent
+const QSO_LINES = ['CQ CQ DE {c} {c} K', '{c} DE {m} K', 'UR RST 5{n}9 5{n}9', 'NAME {name} {name}', 'QTH {qth} {qth}',
+  'TNX FER QSO 73', 'RIG {p}W ANT DIPOLE', 'WX {wx} TEMP {t}C', 'TNX FER CALL GL', '73 TU {c} DE {m} SK'];
+const QSO_PFX = ['OK', 'OL', 'OM', 'DL', 'SP', 'HA', 'OE', 'S5', 'G', 'F', 'I', 'ON'];
+const QSO_NAMES = ['PETR', 'JAN', 'EVA', 'TOM', 'ANNA', 'KAREL', 'JIRI', 'HANS', 'MARIE', 'PAVEL'];
+const QSO_QTH = ['PRAHA', 'BRNO', 'LIBEREC', 'PLZEN', 'OLOMOUC', 'WIEN', 'DRESDEN', 'KRAKOW', 'ZLIN', 'JIHLAVA'];
+const QSO_WX = ['SUNNY', 'CLOUDY', 'RAIN', 'SNOW', 'FOG'];
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const DIGITS = '0123456789';
+
+/** All letters and digits are in the receiving set → the QSO step can be practised. */
+export function qsoReady(chars) {
+  const have = new Set(chars);
+  return [...LETTERS, ...DIGITS].every((c) => have.has(c));
+}
+
+/** A call sign: a prefix, a digit, 2–3 letters. */
+export function qsoCall(rng) {
+  let s = pick(QSO_PFX, rng) + pick([...DIGITS], rng);
+  const n = rng() < 0.5 ? 2 : 3;
+  for (let i = 0; i < n; i++) s += pick([...LETTERS], rng);
+  return s;
+}
+
+/** One sentence of a QSO, e.g. 'UR RST 579 579'. */
+export function qsoLine(rng) {
+  const c = qsoCall(rng);
+  const m = qsoCall(rng);
+  const v = { c, m, n: String(3 + Math.floor(rng() * 7)), name: pick(QSO_NAMES, rng), qth: pick(QSO_QTH, rng),
+    p: String(pick([5, 10, 50, 100], rng)), wx: pick(QSO_WX, rng), t: String(Math.floor(rng() * 30)) };
+  return pick(QSO_LINES, rng).replace(/\{(\w+)\}/g, (_, k) => v[k]);
+}
+
+/**
+ * Z-24: the habits of the hand in a series (metrics + sessionSummary / evaluateSending): word gaps short against the
+ * character gaps, long character gaps, one element more / less in a character (probably the paddle). → [{key, v}]
+ */
+export function handHabits(metrics, ev = null) {
+  const out = [];
+  const cg = metrics?.charGap?.v;
+  const wg = metrics?.wordGap?.v;
+  if (cg && wg && wg / cg < HABIT_WORD_RATIO) out.push({ key: 'wordShort', v: wg / cg });
+  if (cg && cg > HABIT_CHAR_LONG) out.push({ key: 'charLong', v: cg });
+  const n = (ev?.subs || []).filter((x) => oneElement(x.wantCode, x.gotCode)).length;
+  if (n >= HABIT_PADDLE_N) out.push({ key: 'paddle', v: n });
+  return out;
+}
+
+/** b = a with exactly one element added or removed (anywhere). */
+export function oneElement(a, b) {
+  if (!a || !b || Math.abs(a.length - b.length) !== 1) return false;
+  const [l, s] = a.length > b.length ? [a, b] : [b, a];
+  for (let i = 0; i < l.length; i++) if (l.slice(0, i) + l.slice(i + 1) === s) return true;
+  return false;
+}
+
 /**
  * One task: a character (not the same as prev), a group of SEND_GROUP_LEN characters (letters 70 %, digits 20 %,
  * the rest punctuation – as in copy behind), or a word from the mastered letters (pseudo-word when few words fit).
@@ -206,6 +270,7 @@ export function sendTask(kind, chars, rng, prev = null) {
     }
     return out;
   }
+  if (kind === 'qso') return qsoReady(chars) ? qsoLine(rng) : word(chars, rng);
   if (kind === 'word') return word(chars, rng);
   const avail = chars.length > 1 ? chars.filter((c) => c !== prev) : chars;
   return pick(avail, rng);

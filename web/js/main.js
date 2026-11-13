@@ -195,7 +195,7 @@ const bandLab = initBandLab({ player, ensureAudio }); // ZB listening lab (devel
 // VK (0.11.0): telegraph key (experimental, coaches); 0.12.0 sending exercise from the receive level (≥ 10 characters)
 const fwUi = initFwUi(); // 0.15.0: HW key firmware on the key page
 const keyUi = initKeyerUi({ player, ensureAudio, getChars: () => charsForLevel(Math.max(SEND_MIN_CHARS, lvl())),
-  onHwSeen: () => fwUi.hwSeen() });
+  onHwSeen: () => fwUi.hwSeen(), sync });
 const cwLink = {}; // 0.13.2: the channel (keying, playback) – filled below, the room calls it on every poll
 const cwRoom = initCwRoom({ player, ensureAudio, onAuth: () => sessionExpired(), link: cwLink }); // 0.13.1
 // 0.13.6: who knocks while I am elsewhere in the app – no sound in a lesson or on a sound page
@@ -1120,6 +1120,7 @@ initLangSelects();
   const a = $('#other-site');
   if (o) { a.href = o.url; a.textContent = `${o.label} (${o.name})`; } else a.hidden = true;
   if (isPublic()) document.title = t('app.titlePublic');
+  $('#login-ca').hidden = isPublic() || matchMedia('(display-mode: standalone)').matches; // Z-27 A (0.17.2): home CA only in the LAN browser
 }
 if ('serviceWorker' in navigator && window.isSecureContext) {
   // 0.9.7 (Z-08): app files come from the cache → a new version takes over in the background; reload once it is active,

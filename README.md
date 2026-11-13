@@ -10,6 +10,18 @@ nebo počítače instaluje jako PWA a trénovat jde i offline (výsledky se ode�
 - zvuk, časování a vyhodnocení běží v prohlížeči, server ukládá výsledky a počítá plán (SQLite)
 - bez externích služeb a CDN (vše hostované na Pi), rozhraní česky a anglicky (další jazyk = další soubor)
 
+### Co aplikace umí (verze 1.0.0)
+- **Příjem** v úrovních U1–U6: znaky (Koch), příjem ve skluzu, zvuk pásma (únik, QRM, QRN), příjem v hlavě;
+  vstupní test pro navrátilce; trenér hlídá únavu, tempo a postup.
+- **Slovník:** zkratky, Q-kódy (podle Q-kodexu ČRK) a prefixy s tiskem cvičných listů.
+- **Vysílání** HW klíčem CwKey (USB): adaptivní dekodér, hodnocení vůči normě 3 : 7, cvičení a **lekce vysílání**
+  (znaky → skupiny → slova → věty spojení, postup 2 lekce ≥ 90 %), pojmenované návyky ruky.
+- **CW Chat:** kdo je v aplikaci, zaklepání (Knock Knock), spojení 1 : 1 přes šumné pásmo (poloduplex jako na pásmu)
+  a **virtuální operátor** pro cvičné spojení kdykoli (QRS/QRQ může měnit i tempo klíče přes USB MIDI).
+- **Trenér a skupiny:** pozvánky do skupin, Správa uživatelů, nezletilí vidí jen svého trenéra.
+- **HW klíč CwKey:** otevřený hardware [morse-key-hw](https://github.com/OK2MTW/morse-key-hw); firmware se nahrává
+  přímo ze stránky Klíč (Pi ho stahuje z GitHub Releases a kontroluje SHA-256), s FW 0.4.0+ přes USB MIDI.
+
 ## Upozornění – amatérský projekt bez záruk
 - Jde o **amatérský hobby projekt**, který ve volném čase rozvíjí autor **Martin, OK2MTW**, především pro
   vlastní potřebu. Kód je zveřejněný proto, že to vyžaduje licence EUPL-1.2 a pro inspiraci dalším.

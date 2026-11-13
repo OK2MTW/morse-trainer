@@ -41,7 +41,7 @@ export const progress = { ...DEFAULT_PROGRESS, introduced: [], history: [] };
 export const stats = { lessons: 0, chars: {}, at: null };
 // Coach from the server (GET /api/coach, M4): archetype, modifiers, preferences, plan, level U1–U6, plateau.
 export const coachInfo = { data: null };
-export const sync = { canTrain: true, epoch: null, uid: null, dirtySettings: false, dirtyProgress: false, outbox: [], lastSync: null, error: null };
+export const sync = { canTrain: true, epoch: null, seq: null, uid: null, dirtySettings: false, dirtyProgress: false, outbox: [], lastSync: null, error: null };
 let listeners = [];
 export function onDataChange(fn) { listeners.push(fn); }
 const notify = () => listeners.forEach((fn) => fn());
@@ -58,8 +58,20 @@ function persist() {
     settings: Object.fromEntries(SYNCED_SETTINGS.map((k) => [k, settings[k]])),
     progress: { level: progress.level, introduced: progress.introduced, history: progress.history },
     dirtySettings: sync.dirtySettings, dirtyProgress: sync.dirtyProgress, outbox: sync.outbox, lastSync: sync.lastSync,
-    epoch: sync.epoch, stats, coach: coachInfo.data,
+    epoch: sync.epoch, seq: sync.seq, stats, coach: coachInfo.data,
   });
+}
+
+/** Server lessons first, then the known history and the unsent lessons – each id once, by time, the last HISTORY_MAX. */
+export function mergeHistory(server, known, pending) {
+  const seen = new Set();
+  const out = [];
+  for (const x of [...server, ...known, ...pending]) {
+    if (seen.has(x.id)) continue;
+    seen.add(x.id);
+    out.push(x);
+  }
+  return out.sort((a, b) => (a.at < b.at ? -1 : 1)).slice(-HISTORY_MAX);
 }
 
 /** Loads the user's cache (without network). */
@@ -78,6 +90,7 @@ export function openUser(uid) {
   sync.outbox = Array.isArray(c.outbox) ? c.outbox : [];
   sync.lastSync = c.lastSync || null;
   sync.epoch = Number.isInteger(c.epoch) ? c.epoch : null;
+  sync.seq = Number.isInteger(c.seq) && sync.epoch !== null ? c.seq : null;
   sync.error = null;
   setStats(c.stats);
   coachInfo.data = c.coach && typeof c.coach === 'object' ? c.coach : null;
@@ -97,6 +110,7 @@ function wipeTraining() {
   progress.history = [];
   sync.outbox = [];
   sync.dirtyProgress = false;
+  sync.seq = null;
 }
 
 /** Reset of one's own training (confirmed by password). Settings stay. */
@@ -194,21 +208,24 @@ async function doSync() {
       } catch (e) { sync.dirtyProgress = true; throw e; }
     }
     // 2) fetch
-    const d = await api('GET', '/data');
+    // Z-20 (0.17.1): only the lessons the server stored after the last sync (by its own sequence, not the client time)
+    const legacy = legacyData();
+    const inc = !legacy && Number.isInteger(sync.seq) && sync.epoch !== null;
+    let d = await api('GET', inc ? `/data?after=${sync.seq}` : '/data');
     if (sync.uid !== uid) return null; // logged out meanwhile
+    if (d.partial && d.epoch !== sync.epoch) d = await api('GET', '/data'); // reset elsewhere → everything again
+    if (sync.uid !== uid) return null;
     if (sync.epoch !== null && d.epoch !== sync.epoch) wipeTraining(); // reset from another device
     sync.epoch = d.epoch;
-    const legacy = legacyData();
     if (legacy && sync.canTrain) return await importLegacy(legacy, d);
     if (d.settings && !sync.dirtySettings) { Object.assign(settings, d.settings); clampSettings(); }
     if (d.progress && !sync.dirtyProgress) {
       progress.level = d.progress.level;
       progress.introduced = d.progress.introduced;
     }
-    const pending = sync.outbox;
-    const ids = new Set(d.lessons.map((x) => x.id));
-    progress.history = [...d.lessons, ...pending.filter((x) => !ids.has(x.id)).map(({ detail, ...x }) => x)]
-      .sort((a, b) => (a.at < b.at ? -1 : 1)).slice(-HISTORY_MAX);
+    const pending = sync.outbox.map(({ detail, ...x }) => x);
+    progress.history = mergeHistory(d.lessons, d.partial ? progress.history : [], pending);
+    sync.seq = Number.isInteger(d.seq) ? d.seq : null;
     if (sync.canTrain) {
       try {
         const st = await api('GET', '/stats');

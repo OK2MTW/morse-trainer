@@ -199,6 +199,8 @@ def send_task(kind, chars, rng, prev=None):
                 pool = p['L'] or chars
             out += pool[int(rng() * len(pool))]
         return out
+    if kind == 'qso':
+        return qso_line(rng) if qso_ready(chars) else word(chars, rng)
     if kind == 'word':
         return word(chars, rng)
     avail = [c for c in chars if c != prev] if len(chars) > 1 else chars
@@ -238,3 +240,65 @@ def session_summary(lst):
     metrics = metrics_from(pool)
     return {'acc': {**c, 'v': v, 'st': 'good' if v >= ACC_GOOD else ('ok' if v >= ACC_OK else 'bad')},
             'subs': subs, 'conf': conf, 'fixes': fixes, 'metrics': metrics, 'tasks': len(lst)}
+
+
+# 0.17.0 D4 + Z-24 (ports of qsoReady / qsoCall / qsoLine / handHabits / oneElement)
+SEND_STEPS = re.findall(r"'(\w+)'", re.search(r'export const SEND_STEPS = \[([^\]]*)\]', SENDEVAL_JS).group(1))
+SEND_PASS_ACC = CONSTS['SEND_PASS_ACC']
+SEND_PASS_N = int(CONSTS['SEND_PASS_N'])
+HABIT_WORD_RATIO = CONSTS['HABIT_WORD_RATIO']
+HABIT_CHAR_LONG = CONSTS['HABIT_CHAR_LONG']
+HABIT_PADDLE_N = int(CONSTS['HABIT_PADDLE_N'])
+QSO_LINES = re.findall(r"'([^']*)'", re.search(r'const QSO_LINES = \[(.*?)\];', SENDEVAL_JS, re.S).group(1))
+QSO_PFX = re.findall(r"'(\w+)'", re.search(r'const QSO_PFX = \[(.*?)\];', SENDEVAL_JS, re.S).group(1))
+QSO_NAMES = re.findall(r"'(\w+)'", re.search(r'const QSO_NAMES = \[(.*?)\];', SENDEVAL_JS, re.S).group(1))
+QSO_QTH = re.findall(r"'(\w+)'", re.search(r'const QSO_QTH = \[(.*?)\];', SENDEVAL_JS, re.S).group(1))
+QSO_WX = re.findall(r"'(\w+)'", re.search(r'const QSO_WX = \[(.*?)\];', SENDEVAL_JS, re.S).group(1))
+LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+DIGITS = '0123456789'
+
+
+def _pick(arr, rng):
+    return arr[int(rng() * len(arr))]
+
+
+def qso_ready(chars):
+    have = set(chars)
+    return all(c in have for c in LETTERS + DIGITS)
+
+
+def qso_call(rng):
+    s = _pick(QSO_PFX, rng) + _pick(DIGITS, rng)
+    n = 2 if rng() < 0.5 else 3
+    for _ in range(n):
+        s += _pick(LETTERS, rng)
+    return s
+
+
+def qso_line(rng):
+    c = qso_call(rng)
+    m = qso_call(rng)
+    v = {'c': c, 'm': m, 'n': str(3 + int(rng() * 7)), 'name': _pick(QSO_NAMES, rng), 'qth': _pick(QSO_QTH, rng),
+         'p': str(_pick([5, 10, 50, 100], rng)), 'wx': _pick(QSO_WX, rng), 't': str(int(rng() * 30))}
+    return re.sub(r'\{(\w+)\}', lambda mo: v[mo.group(1)], _pick(QSO_LINES, rng))
+
+
+def one_element(a, b):
+    if not a or not b or abs(len(a) - len(b)) != 1:
+        return False
+    lo, sh = (a, b) if len(a) > len(b) else (b, a)
+    return any(lo[:i] + lo[i + 1:] == sh for i in range(len(lo)))
+
+
+def hand_habits(metrics, ev=None):
+    out = []
+    cg = (metrics.get('charGap') or {}).get('v')
+    wg = (metrics.get('wordGap') or {}).get('v')
+    if cg and wg and wg / cg < HABIT_WORD_RATIO:
+        out.append({'key': 'wordShort', 'v': wg / cg})
+    if cg and cg > HABIT_CHAR_LONG:
+        out.append({'key': 'charLong', 'v': cg})
+    n = sum(1 for x in ((ev or {}).get('subs') or []) if one_element(x['wantCode'], x['gotCode']))
+    if n >= HABIT_PADDLE_N:
+        out.append({'key': 'paddle', 'v': n})
+    return out

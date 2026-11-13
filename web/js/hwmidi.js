@@ -146,6 +146,78 @@ export function chipTarget(release, chip) {
   return (release?.targets || []).find((tg) => String(tg.mcu || '').includes(chip)) || null;
 }
 
+// 0.16.4 (Z-26): "QRS / QRQ changes the tempo of my key too" – the VO page sets the keyer speed of the HW key
+export const KEY_WPM_ID = 0x01;
+export const KEY_WPM_MIN = 5;
+export const KEY_WPM_MAX = 60;
+export const MIDI_STORE = 'morse.fw.midi';   // the MIDI switch (the Firmware card) – '1' = on
+
+export function midiSwitchOn() {
+  try { return localStorage.getItem(MIDI_STORE) === '1'; } catch (e) { return false; }
+}
+export function saveMidiSwitch(on) {
+  try { localStorage.setItem(MIDI_STORE, on ? '1' : '0'); } catch (e) { /* private mode */ }
+}
+
+/**
+ * The tempo of the key during one connection with the VO (pure logic). Only the user's own QRS / QRQ changes it,
+ * by the same step as the VO (`step` WPM from the key's current speed, 5–60). The KEY button rules (CHANGED) until
+ * the next request. At the end the original speed (GET before the first SET) comes back – unless the hand chose last.
+ */
+export class KeyTempo {
+  constructor(step) {
+    this.step = step;
+    this.orig = null;     // the key's speed before the connection
+    this.wpm = null;      // the key's speed now (as far as we know)
+    this.pending = null;  // a requested speed not yet acknowledged by the key
+    this.hand = false;    // the KEY button changed it last
+    this.ours = false;    // the app changed it (restore at the end)
+  }
+
+  /** The speed read from the key (GET) – the first one is the original. */
+  known(wpm) {
+    if (this.orig === null) this.orig = wpm;
+    if (this.wpm === null) this.wpm = wpm;
+  }
+
+  /** The user's QRS (dir −1) / QRQ (+1) → the speed to SET, or null (unknown speed or already at the limit). */
+  request(dir) {
+    if (this.wpm === null) return null;
+    this.hand = false;
+    const base = this.pending ?? this.wpm;
+    const w = Math.min(KEY_WPM_MAX, Math.max(KEY_WPM_MIN, Math.round(base + dir * this.step)));
+    this.pending = w === this.wpm ? null : w;
+    return this.pending;
+  }
+
+  /** The key acknowledged SET wpm. */
+  sent(wpm) {
+    this.wpm = wpm;
+    if (this.pending === wpm) this.pending = null;
+    this.ours = true;
+  }
+
+  /** CHANGED from the KEY button: the hand rules, nothing pending, nothing to restore. */
+  changed(wpm) {
+    this.wpm = wpm;
+    this.pending = null;
+    this.hand = true;
+    this.ours = false;
+  }
+
+  /** The speed to SET at the end of the connection, or null. */
+  restoreTo() {
+    return this.ours && !this.hand && this.orig !== null && this.wpm !== this.orig ? this.orig : null;
+  }
+}
+
+let shared = null;
+/** One HwMidi for the whole page (the Firmware card and the VO share the key's ports). */
+export function sharedMidi() {
+  if (!shared) shared = new HwMidi();
+  return shared;
+}
+
 /** Web MIDI driver of one CW Key (browser only). */
 export class HwMidi {
   constructor() {
@@ -157,6 +229,13 @@ export class HwMidi {
     this.info = null;
     this.onChanged = null;   // (decoded CHANGED) – a setting changed with the KEY button
     this.onPorts = null;     // (connected: bool) – the key appeared / disappeared
+    this.subs = new Set();   // 0.16.4: more listeners {changed?, ports?} (the VO next to the Firmware card)
+  }
+
+  /** Adds a listener {changed(d)?, ports(on)?} → a function that removes it. */
+  listen(l) {
+    this.subs.add(l);
+    return () => this.subs.delete(l);
   }
 
   static supported() {
@@ -175,6 +254,7 @@ export class HwMidi {
         if (was !== this.connected()) {
           if (!this.connected()) this.info = null;
           this.onPorts?.(this.connected());
+          for (const l of this.subs) l.ports?.(this.connected());
         }
       });
     }
@@ -208,7 +288,11 @@ export class HwMidi {
   message(data) {
     const d = decode(parse(data));
     if (!d) return;
-    if (d.type === 'changed') { this.onChanged?.(d); return; }
+    if (d.type === 'changed') {
+      this.onChanged?.(d);
+      for (const l of this.subs) l.changed?.(d);
+      return;
+    }
     const w = this.wait.get(d.seq);
     if (!w) return;
     if (d.type === 'value' && w.collect) { w.values.push(d); w.arm(); return; }
@@ -252,6 +336,13 @@ export class HwMidi {
     const d = await this.request(MIDI_GET_ALL, undefined, true);
     if (d.type !== 'ack') throw new Error(d.reason || 'reply');
     return settingsMap(d.values);
+  }
+
+  /** GET of one setting → its value. */
+  async get(id) {
+    const d = await this.request(MIDI_GET, (seq) => frame(MIDI_GET, seq, [id]));
+    if (d.type !== 'value' || d.id !== id) throw new Error(d.reason || 'reply');
+    return d.value;
   }
 
   /** SET in the key's RAM (the key stores it itself 5 s later) → the ACK / NAK. */

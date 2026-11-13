@@ -177,3 +177,47 @@ class FakeKey:
         w = self.values[1]
         self.values[1] = next((s for s in steps if s > w), 20)
         return [0xF0, 0x7D, 0x43, 0x4B, 1, C['MIDI_CHANGED'], 0, 1, *to14(self.values[1]), 0xF7]
+
+
+class KeyTempo:
+    """Port of KeyTempo (0.16.4, Z-26): the key's tempo follows the user's QRS / QRQ to the VO."""
+
+    def __init__(self, step):
+        self.step = step
+        self.orig = None
+        self.wpm = None
+        self.pending = None
+        self.hand = False
+        self.ours = False
+
+    def known(self, wpm):
+        if self.orig is None:
+            self.orig = wpm
+        if self.wpm is None:
+            self.wpm = wpm
+
+    def request(self, dir_):
+        if self.wpm is None:
+            return None
+        self.hand = False
+        base = self.pending if self.pending is not None else self.wpm
+        w = min(C['KEY_WPM_MAX'], max(C['KEY_WPM_MIN'], round(base + dir_ * self.step)))
+        self.pending = None if w == self.wpm else w
+        return self.pending
+
+    def sent(self, wpm):
+        self.wpm = wpm
+        if self.pending == wpm:
+            self.pending = None
+        self.ours = True
+
+    def changed(self, wpm):
+        self.wpm = wpm
+        self.pending = None
+        self.hand = True
+        self.ours = False
+
+    def restore_to(self):
+        if self.ours and not self.hand and self.orig is not None and self.wpm != self.orig:
+            return self.orig
+        return None

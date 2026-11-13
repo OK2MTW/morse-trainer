@@ -200,6 +200,23 @@ MIGRATIONS = [
         salt  TEXT NOT NULL
     )
     """,
+    # 13 (0.17.0): D4 sending lessons (A-15) – one row per finished lesson of 10 tasks; the step is computed from them
+    """
+    CREATE TABLE send_lessons (
+        id         INTEGER PRIMARY KEY,
+        user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        client_id  TEXT NOT NULL,
+        mode       TEXT NOT NULL DEFAULT 'vysilani',
+        at         TEXT NOT NULL,
+        step       TEXT NOT NULL,          -- 'char' | 'group' | 'word' | 'qso'
+        tasks      INTEGER NOT NULL,
+        acc        REAL NOT NULL,          -- correctness 0–1
+        wpm        REAL,                   -- effective speed
+        detail     TEXT,                   -- JSON: form metrics, focus, habits, confusions
+        UNIQUE (user_id, client_id)
+    );
+    CREATE INDEX send_lessons_user ON send_lessons (user_id, at)
+    """,
 ]
 
 

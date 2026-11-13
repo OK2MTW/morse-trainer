@@ -3,13 +3,23 @@
 > **Languages:** the user interface is available in **Czech and English**; the code (identifiers, comments) is in
 > English; the detailed documentation ([README.md](README.md)) is in Czech.
 
-A free web application for learning to **receive Morse code**: Koch method, Farnsworth timing, instant character
+A free web application for learning to **receive and send Morse code**: Koch method, Farnsworth timing, instant character
 recognition and an adaptive plan based on the learner's results. The server runs on a Raspberry Pi; the app is
 installed on a phone or computer as a PWA and works offline (results are synced later).
 
 - invitation-only accounts (admin / trainer / learner), password rules, argon2id hashing, no e-mail, no tracking
 - sound, timing and scoring run in the browser; the server stores results and computes the plan (SQLite)
 - no external services or CDNs (everything is self-hosted on the Pi)
+- **receiving** in levels U1–U6: characters (Koch), copy behind, band sound (fading, QRM, QRN), head copy; an entry
+  test for returning operators; the coach watches fatigue, pace and progress
+- **vocabulary:** abbreviations, Q codes (after the Q codex of the Czech Radio Club) and call sign prefixes
+- **sending** with the HW key CwKey (USB): adaptive decoder, evaluation against the 3 : 7 norm, exercises and
+  **sending lessons** (characters → groups → words → QSO sentences, two lessons ≥ 90 % to move on), habits of the hand
+- **CW Chat:** who is online, Knock Knock, 1 : 1 contacts over a noisy band (half duplex as on the air) and a
+  **virtual operator** for a practice QSO any time (QRS / QRQ can change the key speed over USB MIDI)
+- **trainers and groups:** invitations into groups, user management, minors see only their trainer
+- **HW key CwKey:** open hardware [morse-key-hw](https://github.com/OK2MTW/morse-key-hw); its firmware is flashed from
+  the Key page (the Pi downloads GitHub Releases and checks SHA-256), with FW 0.4.0+ over USB MIDI
 - installation on a Raspberry Pi in a home network; optional access from the internet via Pinggy
   (see the Czech README for step-by-step instructions)
 - administration CLI: `.venv/bin/python -m server.admin` (`invite`, `users`, `reset-link`, `password`, `role`,
