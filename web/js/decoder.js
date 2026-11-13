@@ -25,7 +25,7 @@ export const DEC_GAP_IN_HI = 1.6;
 export const DEC_CHAR_GAP_LO = 1.8;   // gap between characters: ≥ 1.8 × the gap inside, ≤ 4.5 × dot
 export const DEC_CHAR_GAP_HI = 4.5;
 export const DEC_WORD_GAP = 1.53;     // word gap threshold = 1.53 × gap between characters (√(7/3))
-export const DEC_FIX_DOTS = 7;        // error sign: at least 7 dots
+export const DEC_FIX_DOTS = 7;        // error sign: at least 7 dots (0.16.1, Martin 2026-11-12)
 export const DEC_INIT_N = 24;         // the starting estimate of the dot from the first 24 tones …
 export const DEC_SPLIT = 1.8;         // … split into dots and dashes at a ratio of neighbouring lengths ≥ 1.8
 // 0.12.2 (validation #31): the rhythm from the neighbourhood – DEC_WIN tones / gaps on each side
@@ -35,6 +35,22 @@ export const DEC_WORD_SPLIT = 1.4;    // gaps between characters / words: ≥ 1.
 export const DEC_IN_MAX = 1.6;        // the lower group can be gaps inside characters when < 1.6 × the dot/dash threshold
 export const DEC_WORD_MID = 4;        // no clear split by ratio: a word gap ≥ 4 × the dot/dash threshold (≈ 7 units)
 export const DEC_IN_ONE = 1.3;        // one group of gaps only: inside characters when < 1.3 × the threshold
+// 0.14.0 (A-11, A-13): the stream of a HW keyer – machine timing (dash = 3 dots, gap inside a character = 1 dot,
+// ±1 ms of USB); only the gaps between characters and words are made by a human
+export const DEC_MACH_SPLIT = 2;      // dot/dash threshold = 2 × dot; a gap < 2 × dot is inside a character
+export const DEC_MACH_WIN = 8;        // the dot from 2 × DEC_MACH_WIN earlier tones … (the speed may change on the HW)
+export const DEC_MACH_LOOK = 6;       // … and at most 6 tones ahead (0.15.4: a decision is final 6 tones later)
+export const DEC_MACH_WORD = 5;       // gaps between characters / words without two groups: a word from 5 dots …
+                                      // … unless the device remembers the hand's threshold (0.16.3, opts.word)
+export const DEC_MACH_WORD_LO = 5;    // a learned word threshold kept within 5–9 dots (0.16.3: Martin's hand – gaps
+export const DEC_MACH_WORD_HI = 9;    // between characters up to 7, words from 9 dots; the evaluation keeps the 3/7 norm)
+export const DEC_MACH_GAPS = 24;      // learned from the last 24 human gaps before the gap (0.15.4: only earlier ones) …
+export const DEC_MACH_MIN = 6;        // … at least 6 of them, else DEC_MACH_WORD
+export const DEC_MACH_SEP = 1.3;      // the two groups of human gaps (around 3 and 7 dots) apart at least 1.3×
+export const DEC_MACH_SD = 0.15;      // the spread of human gaps (log) taken as at least 0.15
+export const DEC_MACH_IN_N = 3;       // the gap inside from at least 3 neighbouring gaps …
+export const DEC_MACH_IN_LO = 0.5;    // … kept within 0.5–1.5 × the tone dot (the shift of late events, innerGap)
+export const DEC_MACH_IN_HI = 1.5;
 
 const DOT = '.';
 const DASH = '-';
@@ -146,6 +162,113 @@ export function gapThresholds(gaps, mid) {
   return [Math.sqrt(a * b), Math.max(b * DEC_WORD_GAP, DEC_WORD_MID * mid)];
 }
 
+/**
+ * Dot length (ms) of a machine stream from neighbouring tone lengths and gaps. Two groups of lengths (dots and
+ * dashes, ratio 3) → the median of the shorter one. One group only (e.g. EISH, TMO): a gap shorter than half the
+ * length can only be a gap inside a character (= 1 dot) → dashes; otherwise the hint (the last known dot) decides.
+ */
+export function machineDot(lens, gaps, hint) {
+  const m = apart(split(lens), DEC_MACH_SPLIT);
+  if (m) return m[0];
+  if (!lens.length) return hint;
+  const md = median(lens);
+  if (gaps.length && Math.min(...gaps) < md / DEC_MACH_SPLIT) return md / 3;
+  return md < DEC_MACH_SPLIT * hint ? md : md / 3;
+}
+
+/**
+ * 0.15.4: the gap inside a character the keyer made (ms) from neighbouring gaps < DEC_MACH_SPLIT dots – it is 1 dot
+ * on the key, but a late key down / up event (USB, browser) makes tones longer and gaps shorter by the same time.
+ * Fewer than DEC_MACH_IN_N such gaps → u (no correction); kept within DEC_MACH_IN_LO–HI × u.
+ */
+export function innerGap(gaps, u) {
+  const g = gaps.filter((x) => x < DEC_MACH_SPLIT * u);
+  if (g.length < DEC_MACH_IN_N) return u;
+  return Math.min(DEC_MACH_IN_HI * u, Math.max(DEC_MACH_IN_LO * u, median(g)));
+}
+
+/**
+ * Tones of a machine stream with known elements: {…tone, el, u} (u = the local dot in ms). hint = dot in ms.
+ * 0.15.4: the dot of a tone from earlier tones and at most DEC_MACH_LOOK tones ahead – decoding the growing record
+ * again and again gives the same result for everything older (an erased word does not come back, validation B).
+ */
+export function machineTones(tones, hint) {
+  const lens = tones.map((tn) => tn.end - tn.start);
+  const gms = tones.slice(1).map((tn, i) => tn.start - tones[i].end);
+  const n = 2 * DEC_MACH_WIN + 1;
+  let u = hint;
+  return tones.map((tn, i) => {
+    const m1 = Math.min(lens.length, i + DEC_MACH_LOOK + 1);
+    const m0 = Math.max(0, m1 - n);
+    u = machineDot(lens.slice(m0, m1), gms.slice(m0, m1 - 1), u);
+    return { ...tn, el: lens[i] < DEC_MACH_SPLIT * u ? DOT : DASH, u, g: innerGap(gms.slice(m0, m1 - 1), u) };
+  });
+}
+
+const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+const sqDev = (a, m) => a.reduce((x, y) => x + (y - m) ** 2, 0);
+
+/**
+ * Threshold between characters / words (in dots) from earlier human gaps of a machine stream (in dots,
+ * ≥ DEC_MACH_SPLIT): two groups in the log domain (k-means started at 3 and 7 dots), the threshold in the middle
+ * between them, shifted by how many gaps each group has (Bayes with a common spread), kept within
+ * DEC_MACH_WORD_LO–HI (0.15.4); fewer than DEC_MACH_MIN gaps or no two clear groups → `start` (0.16.3: the threshold
+ * this device learned from the hand earlier, else DEC_MACH_WORD; null = nothing learned → null).
+ */
+export function machineWordGap(units, start = DEC_MACH_WORD) {
+  const fb = start === null ? null : Math.min(DEC_MACH_WORD_HI, Math.max(DEC_MACH_WORD_LO, start));
+  if (units.length < DEC_MACH_MIN) return fb;
+  const h = units.map(Math.log);
+  let a = Math.log(3);
+  let b = Math.log(7);
+  let A = [];
+  let B = [];
+  for (let k = 0; k < 15; k++) {
+    A = h.filter((x) => Math.abs(x - a) <= Math.abs(x - b));
+    B = h.filter((x) => Math.abs(x - a) > Math.abs(x - b));
+    if (A.length) a = mean(A);
+    if (B.length) b = mean(B);
+  }
+  if (A.length < 2 || !B.length || b - a < Math.log(DEC_MACH_SEP)) return fb;
+  const s2 = Math.max((sqDev(A, a) + sqDev(B, b)) / h.length, DEC_MACH_SD ** 2);
+  const w = Math.exp((a + b) / 2 + (s2 * Math.log(A.length / B.length)) / (b - a));
+  return Math.min(DEC_MACH_WORD_HI, Math.max(DEC_MACH_WORD_LO, w));
+}
+
+/**
+ * 0.16.3 (Martin: "adapt it to me for now, the evaluation always against the norm"): the word threshold learned
+ * from the human gaps of a decoding, or null (too few gaps / no two groups). The pages keep it per device
+ * (WORD_STORE) and pass it as opts.word, so the next record / over starts with the hand's threshold, not 5 dots.
+ */
+export function learnedWordGap(dec) {
+  const h = (dec?.units || []).filter((x) => x !== null && x >= DEC_MACH_SPLIT);
+  return machineWordGap(h.slice(-DEC_MACH_GAPS), null);
+}
+
+const WORD_STORE = 'morse.dec.word';
+
+/** The word threshold this device learned earlier (dots), or undefined. */
+export function loadWordHint() {
+  try {
+    const w = Number(localStorage.getItem(WORD_STORE));
+    return w >= DEC_MACH_WORD_LO && w <= DEC_MACH_WORD_HI ? w : undefined;
+  } catch (e) { return undefined; }
+}
+
+/** Remembers the threshold learned from this decoding of the user's own keying (nothing learned → unchanged). */
+export function saveWordHint(dec) {
+  const w = learnedWordGap(dec);
+  if (w === null) return;
+  try { localStorage.setItem(WORD_STORE, w.toFixed(2)); } catch (e) { /* private mode */ }
+}
+
+/** Kind of a gap of a machine stream: inside a character (< DEC_MACH_SPLIT dots, the keyer kept running), between
+ * characters (< word dots) or words. u = the local dot in ms. */
+export function machineGapKind(ms, u, word) {
+  if (ms < DEC_MACH_SPLIT * u) return 0;
+  return ms < word * u ? 1 : 2;
+}
+
 class DecoderState {
   constructor(u) {
     this.dot = u; this.dash = 3 * u; this.g1 = u; this.g3 = 3 * u;
@@ -194,10 +317,16 @@ class DecoderState {
 
 /**
  * tones = [{start, end, el?}] in ms, time order; el = known element (automatic keyer), missing/null = classify by
- * length. morse = {char: code}. Returns {text, codes, chars: [{ch, code, i0, i1}], marks, gaps (null for the first
- * tone), fixes, dot, dash, g1, g3, wpm} – the estimates at the end, wpm from the unit estimate.
+ * length. morse = {char: code}. opts.machine = a stream of a HW keyer (0.14.0): elements and gaps inside characters
+ * by machine timing (machineTones, opts.dot = the hint of the dot in ms, else from wpm). Returns {text, codes,
+ * chars: [{ch, code, i0, i1}], marks, gaps (null for the first tone), fixes, dot, dash, g1, g3, wpm, tones} – the
+ * estimates at the end, wpm from the unit estimate, tones = the input (machine: with el and u).
+ * Machine stream (0.15.4, diagnostics): units = each gap in dots, words = the word threshold in dots it was judged
+ * by (null for the first tone; empty arrays otherwise).
  */
-export function decodeTones(tones, wpm, morse) {
+export function decodeTones(tones, wpm, morse, opts = {}) {
+  const machine = !!opts.machine;
+  if (machine) tones = machineTones(tones, opts.dot || 1200 / wpm);
   const byCode = {};
   for (const [ch, code] of Object.entries(morse)) if (!(code in byCode)) byCode[code] = ch;
   const st = new DecoderState(initialDot(tones, wpm));
@@ -225,16 +354,36 @@ export function decodeTones(tones, wpm, morse) {
   // the rhythm of the hand from the neighbourhood (DEC_WIN tones / gaps on each side), see the header
   const lens = tones.map((tn) => tn.end - tn.start);
   const gms = tones.slice(1).map((tn, i) => tn.start - tones[i].end);
+  // machine stream: the threshold between characters and words from earlier human gaps (in dots – the speed may change)
+  const human = [];
+  const units = [];
+  const words = [];
   let prevEnd = null;
   tones.forEach((tn, i) => {
     if (prevEnd === null) {
       gaps.push(null);
+      if (machine) { units.push(null); words.push(null); }
     } else {
       // a window of a fixed size (at the start and the end shifted inwards → the same amount of context)
       const g0 = Math.min(Math.max(0, i - 1 - DEC_WIN), Math.max(0, gms.length - 2 * DEC_WIN - 1));
-      const thr = gapThresholds(gms.slice(g0, g0 + 2 * DEC_WIN + 1), st.mid());
+      const near = gms.slice(g0, g0 + 2 * DEC_WIN + 1);
       const ms = tn.start - prevEnd;
-      const kind = st.gap(ms, thr === null ? null : (ms < thr[0] ? 0 : (ms < thr[1] ? 1 : 2)));
+      let kind;
+      if (machine) {
+        // a late event shifts every edge alike: the true dot = (tone dot + gap inside) / 2, a gap + half the difference
+        const tu = (tn.u + tones[i - 1].u) / 2;
+        const g = (tn.g + tones[i - 1].g) / 2;
+        const u = (tu + g) / 2;
+        const x = (ms + (tu - g) / 2) / u;
+        const word = machineWordGap(human.slice(-DEC_MACH_GAPS), opts.word || DEC_MACH_WORD);
+        kind = st.gap(ms, machineGapKind(x, 1, word));
+        units.push(x);
+        words.push(word);
+        if (x >= DEC_MACH_SPLIT) human.push(x);
+      } else {
+        const thr = gapThresholds(near, st.mid());
+        kind = st.gap(ms, thr === null ? null : (ms < thr[0] ? 0 : (ms < thr[1] ? 1 : 2)));
+      }
       gaps.push(kind);
       if (kind) {
         flush(i - 1);
@@ -258,7 +407,52 @@ export function decodeTones(tones, wpm, morse) {
   return {
     text: chars.map((c) => c.ch).join(''),
     codes: chars.map((c) => c.code),
-    chars, marks, gaps, fixes,
-    dot: st.dot, dash: st.dash, g1: st.g1, g3: st.g3, wpm: 1200 / st.unit(),
+    chars, marks, gaps, fixes, units, words,
+    dot: st.dot, dash: st.dash, g1: st.g1, g3: st.g3, wpm: 1200 / st.unit(), tones,
   };
+}
+
+// 0.15.4: diagnostics of the key page ("How the decoder reads") – the last words of a machine stream gap by gap
+export const DEC_DIAG_WORDS = 3;      // the last 3 words
+export const DEC_DIAG_NEAR = 1.15;    // a gap within 15 % of a threshold is marked as close
+
+const near = (x, thr) => Math.abs(Math.log(x / thr)) < Math.log(DEC_DIAG_NEAR);
+
+/**
+ * Characters of the last nWords words of a decoded machine stream (decodeTones with opts.machine) with their gaps in
+ * dots: [{code, ch (null = no character, '' = the error sign), before (the gap before in dots, null at the start),
+ * kind (0/1/2 of that gap), word (the word threshold it was judged by), close (before is near a threshold), inMax
+ * (the longest gap inside, dots), inClose}] and {dot (ms), wpm, split, word (the last threshold)}; null without data.
+ */
+export function gapDiagnostics(dec, morse, nWords = DEC_DIAG_WORDS) {
+  const { tones, gaps, units, words } = dec;
+  if (!tones.length || units.length !== tones.length) return null;
+  const byCode = {};
+  for (const [ch, code] of Object.entries(morse)) if (!(code in byCode)) byCode[code] = ch;
+  let start = 0;
+  let seen = 0;
+  for (let i = gaps.length - 1; i > 0; i--) {
+    if (gaps[i] === 2 && ++seen >= nWords) { start = i; break; }
+  }
+  const rows = [];
+  let row = null;
+  for (let i = start; i < tones.length; i++) {
+    if (i === start || gaps[i] > 0) {
+      row = {
+        code: '', ch: null, before: i === start && i === 0 ? null : units[i], kind: i === 0 ? null : gaps[i],
+        word: words[i], close: false, inMax: null, inClose: false,
+      };
+      if (row.before !== null) row.close = near(row.before, DEC_MACH_SPLIT) || near(row.before, row.word);
+      rows.push(row);
+    } else {
+      row.inMax = Math.max(row.inMax ?? 0, units[i]);
+      row.inClose = near(row.inMax, DEC_MACH_SPLIT);
+    }
+    row.code += tones[i].el;
+  }
+  const fix = new RegExp(`^\\.{${DEC_FIX_DOTS},}$`);
+  for (const r of rows) r.ch = fix.test(r.code) ? '' : (byCode[r.code] ?? null);
+  const last = tones.at(-1);
+  const dot = (last.u + last.g) / 2;
+  return { rows, dot, wpm: 1200 / dot, split: DEC_MACH_SPLIT, word: words.filter((w) => w !== null).at(-1) ?? DEC_MACH_WORD };
 }

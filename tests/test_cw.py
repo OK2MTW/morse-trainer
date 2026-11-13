@@ -307,6 +307,27 @@ class CwApiTest(unittest.TestCase):
         st = c.req("GET", "/api/cw/state").get_json()
         return st, {u["nick"] for u in st.get("users", [])}
 
+    def test_key_lab(self):
+        """0.14.4: the trainer opens the key page to one of their students; coaches always have it."""
+        kid = self.student("CwKlic", "do15")
+        me = lambda c: c.req("GET", "/api/me").get_json()["user"]["key_lab"]  # noqa: E731
+        self.assertFalse(me(kid))
+        self.assertTrue(me(self.coach))
+        other = Client()
+        assert other.register(make_invite("trener"), "CwTrener3").status_code == 201
+        self.assertEqual(other.req("PUT", f"/api/users/{kid.id}/key-lab", {"on": True}).status_code, 404)
+        self.assertEqual(kid.req("PUT", f"/api/users/{kid.id}/key-lab", {"on": True}).status_code, 403)
+        self.assertEqual(self.coach.req("PUT", f"/api/users/{self.coach_id()}/key-lab", {"on": True}).status_code, 404)
+        self.assertEqual(self.coach.req("PUT", f"/api/users/{kid.id}/key-lab", {"on": True}).status_code, 200)
+        self.assertTrue(me(kid))
+        users = {u["nick"]: u for u in self.coach.req("GET", "/api/users").get_json()["users"]}
+        self.assertEqual(users["CwKlic"]["key_lab"], 1)
+        self.assertEqual(self.admin.req("PUT", f"/api/users/{kid.id}/key-lab", {"on": False}).status_code, 200)
+        self.assertFalse(me(kid))
+
+    def coach_id(self):
+        return self.coach.req("GET", "/api/me").get_json()["user"]["id"]
+
     def test_groups_crud(self):
         r = self.coach.req("POST", "/api/groups", {"name": "  Krouzek   A "})
         self.assertEqual(r.status_code, 201)
@@ -393,6 +414,9 @@ class CwApiTest(unittest.TestCase):
         self.assertEqual(st["channel"], "free")
         # block: the blocked user disappears and the connection ends
         self.assertEqual(a2.req("POST", "/api/cw/block", {"id": a1.id}).status_code, 200)
+        ex = a2.req("GET", "/api/export").get_json()["cw"]  # 0.13.10: the export carries blocks and the trainer
+        self.assertEqual([b["nick"] for b in ex["blocked"]], ["CwDosp1"])
+        self.assertEqual(ex["coach"], "CwTrener")
         st, seen = self.nicks(a2)
         self.assertNotIn("CwDosp1", seen)
         self.assertEqual(st["blocked"], [{"id": a1.id, "nick": "CwDosp1"}])

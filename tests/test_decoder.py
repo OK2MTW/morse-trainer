@@ -102,7 +102,7 @@ class DecoderTest(unittest.TestCase):
                      'return [Math.sqrt(ma[0] * ma[1]), Math.sqrt(ma[1] * b)];',
                      'return [Math.sqrt(a * b), Math.max(b * DEC_WORD_GAP, DEC_WORD_MID * mid)];',
                      'const g0 = Math.min(Math.max(0, i - 1 - DEC_WIN), Math.max(0, gms.length - 2 * DEC_WIN - 1));',
-                     'const thr = gapThresholds(gms.slice(g0, g0 + 2 * DEC_WIN + 1), st.mid());',
+                     'const near = gms.slice(g0, g0 + 2 * DEC_WIN + 1);', 'const thr = gapThresholds(near, st.mid());',
                      'const m0 = Math.min(Math.max(0, i - DEC_WIN), Math.max(0, lens.length - 2 * DEC_WIN - 1));',
                      'const thr = markThreshold(lens.slice(m0, m0 + 2 * DEC_WIN + 1));',
                      'alpha(n) { return Math.max(DEC_ALPHA, 1 / (n + 2)); }',

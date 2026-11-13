@@ -25,6 +25,19 @@ WORD_SPLIT = CONSTS['DEC_WORD_SPLIT']
 IN_MAX = CONSTS['DEC_IN_MAX']
 WORD_MID = CONSTS['DEC_WORD_MID']
 IN_ONE = CONSTS['DEC_IN_ONE']
+MACH_SPLIT = CONSTS['DEC_MACH_SPLIT']
+MACH_WIN = int(CONSTS['DEC_MACH_WIN'])
+MACH_WORD = CONSTS['DEC_MACH_WORD']
+MACH_SEP = CONSTS['DEC_MACH_SEP']
+MACH_LOOK = int(CONSTS['DEC_MACH_LOOK'])
+MACH_WORD_LO = CONSTS['DEC_MACH_WORD_LO']
+MACH_WORD_HI = CONSTS['DEC_MACH_WORD_HI']
+MACH_GAPS = int(CONSTS['DEC_MACH_GAPS'])
+MACH_MIN = int(CONSTS['DEC_MACH_MIN'])
+MACH_SD = CONSTS['DEC_MACH_SD']
+MACH_IN_N = int(CONSTS['DEC_MACH_IN_N'])
+MACH_IN_LO = CONSTS['DEC_MACH_IN_LO']
+MACH_IN_HI = CONSTS['DEC_MACH_IN_HI']
 DOT, DASH = '.', '-'
 
 
@@ -132,6 +145,79 @@ def gap_thresholds(gaps, mid):
     return math.sqrt(a * b), max(b * WORD_GAP, WORD_MID * mid)
 
 
+def machine_dot(lens, gaps, hint):
+    """Dot length (ms) of a machine stream (0.14.0, HW keyer) from neighbouring tone lengths and gaps: two groups
+    → the median of the shorter one; one group: a gap < half the length = inside a character → dashes, otherwise
+    the hint (the last known dot) decides."""
+    m = _apart(_split(lens), MACH_SPLIT)
+    if m:
+        return m[0]
+    if not lens:
+        return hint
+    md = _median(lens)
+    if gaps and min(gaps) < md / MACH_SPLIT:
+        return md / 3
+    return md if md < MACH_SPLIT * hint else md / 3
+
+
+def inner_gap(gaps, u):
+    """0.15.4: the gap inside a character (ms) from neighbouring gaps < MACH_SPLIT dots (late key events make tones
+    longer and gaps shorter); fewer than MACH_IN_N → u, kept within MACH_IN_LO–HI × u."""
+    g = [x for x in gaps if x < MACH_SPLIT * u]
+    if len(g) < MACH_IN_N:
+        return u
+    return min(MACH_IN_HI * u, max(MACH_IN_LO * u, _median(g)))
+
+
+def machine_tones(tones, hint):
+    """Tones of a machine stream with known elements: {**tone, el, u} (u = the local dot in ms); the dot from
+    earlier tones and at most MACH_LOOK tones ahead (0.15.4: older decisions do not change as the record grows)."""
+    lens = [t['end'] - t['start'] for t in tones]
+    gms = [tones[i]['start'] - tones[i - 1]['end'] for i in range(1, len(tones))]
+    n = 2 * MACH_WIN + 1
+    u = hint
+    out = []
+    for i, tn in enumerate(tones):
+        m1 = min(len(lens), i + MACH_LOOK + 1)
+        m0 = max(0, m1 - n)
+        u = machine_dot(lens[m0:m1], gms[m0:m1 - 1], u)
+        g = inner_gap(gms[m0:m1 - 1], u)
+        out.append({**tn, 'el': DOT if lens[i] < MACH_SPLIT * u else DASH, 'u': u, 'g': g})
+    return out
+
+
+def machine_word_gap(units, start=None, learned_only=False):
+    """Threshold between characters / words (in dots) from earlier human gaps of a machine stream (in dots): two
+    groups in the log domain (k-means from 3 and 7 dots), threshold between them shifted by the group sizes
+    (Bayes with a common spread), kept within MACH_WORD_LO–HI;
+    fewer than MACH_MIN gaps or no two clear groups → start (0.16.3: learned earlier, else MACH_WORD; learned_only → None)."""
+    fb = None if learned_only else min(MACH_WORD_HI, max(MACH_WORD_LO, start or MACH_WORD))
+    if len(units) < MACH_MIN:
+        return fb
+    h = [math.log(x) for x in units]
+    a, b = math.log(3), math.log(7)
+    A, B = [], []
+    for _ in range(15):
+        A = [x for x in h if abs(x - a) <= abs(x - b)]
+        B = [x for x in h if abs(x - a) > abs(x - b)]
+        if A:
+            a = sum(A) / len(A)
+        if B:
+            b = sum(B) / len(B)
+    if len(A) < 2 or not B or b - a < math.log(MACH_SEP):
+        return fb
+    s2 = max((sum((x - a) ** 2 for x in A) + sum((x - b) ** 2 for x in B)) / len(h), MACH_SD ** 2)
+    return min(MACH_WORD_HI, max(MACH_WORD_LO, math.exp((a + b) / 2 + s2 * math.log(len(A) / len(B)) / (b - a))))
+
+
+def machine_gap_kind(ms, u, word):
+    """Kind of a gap of a machine stream: inside a character (< MACH_SPLIT dots), between characters (< word
+    dots) or words."""
+    if ms < MACH_SPLIT * u:
+        return 0
+    return 1 if ms < word * u else 2
+
+
 class DecoderState:
     """Running estimates in ms: dot, dash, gap inside a character (g1) and between characters (g3)."""
 
@@ -182,11 +268,14 @@ class DecoderState:
         return (self.dot + self.dash / 3) / 2
 
 
-def decode_tones(tones, wpm, morse):
+def decode_tones(tones, wpm, morse, machine=False, dot=None, word=None):
     """tones = [{start, end, el?}] in ms, time order; el = known element (automatic keyer), missing/None = classify
     by length (straight key, bug dashes – as the other station hears it). Returns
     {text, codes, chars: [{ch, code, i0, i1}], marks: [el per tone], gaps: [kind per tone, None for the first],
-    fixes, dot, dash, g1, g3, wpm}."""
+    fixes, dot, dash, g1, g3, wpm}. word = the word threshold learned earlier on this device (0.16.3)."""
+    word_hint = word or MACH_WORD
+    if machine:
+        tones = machine_tones(tones, dot or 1200 / wpm)
     by_code = {}
     for ch, code in morse.items():
         by_code.setdefault(code, ch)
@@ -216,15 +305,32 @@ def decode_tones(tones, wpm, morse):
     # longer gaps inside characters as T/E only – validation #31)
     lens = [t['end'] - t['start'] for t in tones]
     gms = [tones[i]['start'] - tones[i - 1]['end'] for i in range(1, len(tones))]
+    human, units, words = [], [], []
     prev_end = None
     for i, tn in enumerate(tones):
         if prev_end is None:
             gaps.append(None)
+            if machine:
+                units.append(None)
+                words.append(None)
         else:
             g0 = min(max(0, i - 1 - WIN), max(0, len(gms) - 2 * WIN - 1))
-            thr = gap_thresholds(gms[g0:g0 + 2 * WIN + 1], st.mid())
+            near = gms[g0:g0 + 2 * WIN + 1]
             ms = tn['start'] - prev_end
-            kind = st.gap(ms, None if thr is None else (0 if ms < thr[0] else (1 if ms < thr[1] else 2)))
+            if machine:
+                tu = (tn['u'] + tones[i - 1]['u']) / 2
+                g = (tn['g'] + tones[i - 1]['g']) / 2
+                u = (tu + g) / 2
+                x = (ms + (tu - g) / 2) / u
+                word = machine_word_gap(human[-MACH_GAPS:], word_hint)
+                kind = st.gap(ms, machine_gap_kind(x, 1, word))
+                units.append(x)
+                words.append(word)
+                if x >= MACH_SPLIT:
+                    human.append(x)
+            else:
+                thr = gap_thresholds(near, st.mid())
+                kind = st.gap(ms, None if thr is None else (0 if ms < thr[0] else (1 if ms < thr[1] else 2)))
             gaps.append(kind)
             if kind:
                 flush(i - 1)
@@ -247,5 +353,58 @@ def decode_tones(tones, wpm, morse):
     text = ''.join(c['ch'] for c in chars)
     return {
         'text': text, 'codes': [c['code'] for c in chars], 'chars': chars, 'marks': marks, 'gaps': gaps,
-        'fixes': fixes, 'dot': st.dot, 'dash': st.dash, 'g1': st.g1, 'g3': st.g3, 'wpm': 1200 / st.unit(),
+        'fixes': fixes, 'units': units, 'words': words, 'dot': st.dot, 'dash': st.dash, 'g1': st.g1, 'g3': st.g3, 'wpm': 1200 / st.unit(),
+        'tones': tones,
     }
+
+
+DIAG_WORDS = int(CONSTS['DEC_DIAG_WORDS'])
+DIAG_NEAR = CONSTS['DEC_DIAG_NEAR']
+
+
+def _near(x, thr):
+    return abs(math.log(x / thr)) < math.log(DIAG_NEAR)
+
+
+def gap_diagnostics(dec, morse, n_words=DIAG_WORDS):
+    """0.15.4: the last n_words words of a decoded machine stream gap by gap (port of gapDiagnostics)."""
+    tones, gaps, units, words = dec['tones'], dec['gaps'], dec['units'], dec['words']
+    if not tones or len(units) != len(tones):
+        return None
+    by_code = {}
+    for ch, code in morse.items():
+        by_code.setdefault(code, ch)
+    start, seen = 0, 0
+    for i in range(len(gaps) - 1, 0, -1):
+        if gaps[i] == 2:
+            seen += 1
+            if seen >= n_words:
+                start = i
+                break
+    rows, row = [], None
+    for i in range(start, len(tones)):
+        if i == start or gaps[i] > 0:
+            row = {'code': '', 'ch': None, 'before': None if i == start == 0 else units[i],
+                   'kind': None if i == 0 else gaps[i], 'word': words[i], 'close': False, 'in_max': None,
+                   'in_close': False}
+            if row['before'] is not None:
+                row['close'] = _near(row['before'], MACH_SPLIT) or _near(row['before'], row['word'])
+            rows.append(row)
+        else:
+            row['in_max'] = max(row['in_max'] or 0, units[i])
+            row['in_close'] = _near(row['in_max'], MACH_SPLIT)
+        row['code'] += tones[i]['el']
+    fix = re.compile(r'^\.{%d,}$' % FIX_DOTS)
+    for r in rows:
+        r['ch'] = '' if fix.match(r['code']) else by_code.get(r['code'])
+    last = tones[-1]
+    dot = (last['u'] + last['g']) / 2
+    ws = [w for w in words if w is not None]
+    return {'rows': rows, 'dot': dot, 'wpm': 1200 / dot, 'split': MACH_SPLIT, 'word': ws[-1] if ws else MACH_WORD}
+
+
+def learned_word_gap(dec):
+    """Port of learnedWordGap (0.16.3): the threshold learned from the human gaps of a decoding, or None."""
+    h = [x for x in dec.get('units') or [] if x is not None and x >= MACH_SPLIT]
+    return machine_word_gap(h[-MACH_GAPS:], learned_only=True)
+

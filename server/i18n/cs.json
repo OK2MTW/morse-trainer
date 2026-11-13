@@ -268,5 +268,6 @@
  "cw.err.badBatch": "Neplatná data klíčování.",
  "err.groupNotFound": "Skupina neexistuje.",
  "err.groupName": "Zadej název skupiny.",
- "err.groupExists": "Skupina s tímto názvem už existuje."
+ "err.groupExists": "Skupina s tímto názvem už existuje.",
+ "err.fwNotFound": "Soubor firmwaru nebyl nalezen."
 }

@@ -4,13 +4,13 @@
 // The cache name carries a hash of all ASSETS (tests/swhash.py --write): any change of a file changes sw.js, the browser
 // installs the new set (bypassing the HTTP cache) and the page reloads outside a lesson (main.js, controllerchange).
 // tests/test_sw.py fails when the hash or the ASSETS list is out of date.
-const VERSION = '0.13.9';
-const ASSETS_HASH = 'a73094f1';
+const VERSION = '0.16.3';
+const ASSETS_HASH = 'e932b471';
 const CACHE = `morse-v${VERSION}-${ASSETS_HASH}`;
 const ASSETS = [
   '/', '/index.html', '/css/app.css', '/js/main.js', '/js/audio.js', '/js/keyboard.js', '/js/charset.js', '/js/drill.js', '/js/coach.js', '/js/storage.js',
   '/js/api.js', '/js/account.js', '/js/usersui.js', '/js/cwroomui.js', '/js/cwchannel.js', '/js/cwlink.js', '/js/cwbell.js', '/js/stats.js', '/js/quiz.js', '/js/plan.js', '/js/dashboard.js',
-  '/js/copy.js', '/js/content.js', '/js/words.js', '/js/site.js', '/site-config.js', '/js/pwrules.js', '/js/trace.js', '/js/copylesson.js', '/js/head.js', '/js/headlesson.js', '/js/entry.js', '/js/entrytest.js', '/js/demo.js', '/js/news.js', '/js/i18n.js', '/js/online.js', '/js/band.js', '/js/bandlab.js', '/js/demoband.js', '/js/vocab.js', '/js/vocabui.js', '/js/keyer.js', '/js/decoder.js', '/js/sendeval.js', '/js/keyerui.js', '/o-aplikaci.html',
+  '/js/copy.js', '/js/content.js', '/js/words.js', '/js/site.js', '/site-config.js', '/js/pwrules.js', '/js/trace.js', '/js/copylesson.js', '/js/head.js', '/js/headlesson.js', '/js/entry.js', '/js/entrytest.js', '/js/demo.js', '/js/news.js', '/js/i18n.js', '/js/online.js', '/js/visitcount.js', '/js/uf2.js', '/js/fwui.js', '/js/hwmidi.js', '/js/band.js', '/js/bandlab.js', '/js/demoband.js', '/js/vocab.js', '/js/vocabui.js', '/js/decoder.js', '/js/sendeval.js', '/js/keyerui.js', '/js/keylearn.js', '/js/keyinput.js', '/js/keylog.js', '/js/vo.js', '/js/voui.js', '/o-aplikaci.html',
   '/i18n/languages.json', '/i18n/cs.json', '/i18n/en.json',
   '/vendor/morse-pro/morse-pro.js', '/vendor/morse-pro/morse-pro-message.js',
   '/vendor/morse-pro/morse-pro-cw.js', '/vendor/morse-pro/morse-pro-wpm.js',

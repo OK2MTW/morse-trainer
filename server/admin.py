@@ -8,6 +8,9 @@
   .venv/bin/python -m server.admin role NICK ROLE       → ROLE = admin | trener (coach) | zak (student)
   .venv/bin/python -m server.admin debug [NICK on|off]  → debug trace of the training (no arguments = state)
   .venv/bin/python -m server.admin debug-delete NICK|--all     → deletes debug traces and app errors
+  .venv/bin/python -m server.admin visits [DAYS]       → different visitors per day (home network / outside, of them
+      never logged in = someone found the page); default 14 days, kept permanently
+  .venv/bin/python -m server.admin fw-sync             → downloads the latest HW key firmware release now (data/fw/)
   .venv/bin/python -m server.admin reset-training NICK|--all   → deletes lessons and progress, accounts stay
   .venv/bin/python -m server.admin test-account NICK on|off  → marks a test account (on also enables the debug trace);
       only a new account (or one after reset-training) can be marked – real training stays protected
@@ -27,7 +30,7 @@ import sys
 from datetime import timedelta
 
 from server import auth
-from server import coach, site
+from server import coach, firmware, site, visits
 from server.api import KOCH_ORDER, RESET_DAYS, create_reset_link, reset_training
 from server.auth import ROLE_ADMIN, ROLE_STUDENT, iso, now, sha256
 from server.coach import MODE_CHAR, MODE_COPY
@@ -36,7 +39,7 @@ from server.db import connect, migrate
 # Czech aliases (older notes and instructions) → English commands and options
 ALIASES = {"pozvanka": "invite", "uzivatele": "users", "obnova": "reset-link", "heslo": "password",
            "ladeni": "debug", "ladeni-smazat": "debug-delete", "reset-vycviku": "reset-training",
-           "test-historie": "test-history", "test-ucet": "test-account"}
+           "test-historie": "test-history", "test-ucet": "test-account", "navstevy": "visits"}
 ARG_ALIASES = {"zap": "on", "vyp": "off", "--vsichni": "--all", "--uroven": "--level", "--skluz-krok": "--copy-step"}
 # Link hashes are stored in links already sent – the app accepts these and the English #invite= / #reset=
 INVITE_HASH, RESET_HASH = "pozvanka", "heslo"
@@ -73,6 +76,17 @@ def main(argv):
             print(f"{r['id']:>3}  {r['nick']:<24} {r['role']:<7} {r['age_group'] or '-':<6} "
                   f"created {r['created_at'][:10]}  last login {(r['last_login_at'] or '-')[:16]}"
                   f"{'  BLOCKED' if r['disabled'] else ''}{'  TEST' if r['is_test'] else ''}")
+    elif cmd == "fw-sync" and len(argv) == 1:
+        print(firmware.sync_now(), firmware.current() and firmware.current()["version"])
+    elif cmd == "visits" and (len(argv) == 1 or (len(argv) == 2 and argv[1].isdigit())):
+        v = visits.summary(con, int(argv[1]) if len(argv) == 2 else 14)
+        print("day          home network (never logged in)   outside (never logged in)")
+        for d in v["days"]:
+            print(f"{d['day']}   {d['lan'][0]:>4} ({d['lan'][1]:>3})                      "
+                  f"{d['public'][0]:>4} ({d['public'][1]:>3})")
+        tot = v["total"]
+        print(f"since {v['since']} different visitors: home {tot['lan'][0]} ({tot['lan'][1]}), "
+              f"outside {tot['public'][0]} ({tot['public'][1]}) – counted once per month")
     elif cmd == "password" and len(argv) == 2:
         row = con.execute("SELECT id, nick FROM users WHERE nick = ?", (argv[1],)).fetchone()
         if not row:

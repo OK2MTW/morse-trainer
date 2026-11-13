@@ -182,6 +182,24 @@ MIGRATIONS = [
         PRIMARY KEY (user_id, blocked_id)
     )
     """,
+    # 11 (0.14.4): the trainer opens the telegraph key page (key lab) to one student – otherwise coaches only
+    """
+    ALTER TABLE users ADD COLUMN key_lab INTEGER NOT NULL DEFAULT 0
+    """,
+    # 12 (0.14.5): visit counter (server/visits.py) – a salted hash of the address per day and entry, no IP, no account
+    """
+    CREATE TABLE visits (
+        day    TEXT NOT NULL,             -- YYYY-MM-DD (UTC)
+        entry  TEXT NOT NULL,             -- 'lan' | 'public'
+        who    TEXT NOT NULL,             -- SHA-256(salt of the month | address)[:16]
+        logged INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, entry, who)
+    );
+    CREATE TABLE visit_salts (
+        month TEXT PRIMARY KEY,           -- YYYY-MM
+        salt  TEXT NOT NULL
+    )
+    """,
 ]
 
 

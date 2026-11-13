@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
-// VK (0.11.0, docs/spec-klic.md A-01–A-03, A-10–A-12): Settings → Telegraph key (experimental, coaches only).
-// Keyer with sidetone; inputs: keyboard / USB key converter (a USB keyboard – learned keys, default Left/Right Ctrl)
-// and two on-screen paddles (Pointer Events, multitouch for squeezing). Event log with times for the acceptance test
-// of the converter. Nothing is sent to the server; the key settings belong to the device (localStorage).
+// VK (0.11.0, docs/spec-klic.md A-01–A-03, A-10–A-12): Settings → Telegraph key.
+// 0.15.3 (Martin 2026-11-12): only the HW keyer CwKey (USB) – the app keyer types (iambic, single lever, bug,
+// straight key), the on-screen paddles and the keyboard paddles are gone; without a HW key nothing can be sent.
+// Event log with times for the acceptance test of the key. The key settings belong to the device (localStorage).
 import { t, fmtNum } from './i18n.js';
 import { MORSE } from './charset.js';
-import { Keyer, KEY_TYPES, KEYER_WPM_MIN, KEYER_WPM_MAX, manualSide } from './keyer.js';
-import { decodeTones } from './decoder.js';
+import { decodeTones, gapDiagnostics, loadWordHint, saveWordHint } from './decoder.js';
+import { KeyLearn } from './keylearn.js';
+import { KeyInput, HW_TYPE, hwState } from './keyinput.js';
+import { logSummary, KEYLOG_MAX } from './keylog.js';
 import { traceOn, traceBegin, traceEnd, flushTrace } from './trace.js';
 import {
   sendMetrics, focusOf, evaluateSending, sessionSummary, sendTask, EVAL_WINDOW, SEND_KINDS, SEND_TASKS,
@@ -14,13 +16,13 @@ import {
 } from './sendeval.js';
 
 const STORE = 'morse-key';
-// 0.12.2: the bug stays in the keyer logic (a USB converter may bring it back) but is not offered – nobody used it
-const UI_TYPES = KEY_TYPES.filter((k) => k !== 'bug');
-const DEFAULTS = {
-  type: 'iambicB', wpm: 18, swap: false, sidetone: true, dot: 'ControlLeft', dash: 'ControlRight', exKind: 'char',
-};
-const LOOK_MS = 12;        // the next element is decided this much before its gap ends; the audio clock keeps the rhythm
-const START_S = 0.003;     // a tone from idle starts this far ahead in the audio clock
+// 0.14.0 (spec A-04, docs/hw/klic-rozhrani.md): a HW keyer with USB – the key forms the elements and plays the
+// sidetone; the app reads one stream key (key down = tone on), decodes with machine timing, does not run its keyer.
+// Mode C adds the paddle states as Left / Right Ctrl – only logged (Z-24 later), they do not key anything.
+const PADDLES_MAX = 800;   // paddle events of mode C kept for the debug record
+const DEFAULTS = { type: HW_TYPE, exKind: 'char', stream: 'F13', hwSidetone: false };
+export const HW_WPM = 18;  // the decoder's fallback speed before the first dots of the key are measured
+const validCode = (c) => typeof c === 'string' && /^[A-Za-z0-9]{1,32}$/.test(c);
 const LOG_MAX = 40;
 const ELEMENTS_MAX = 400;
 const EST_MIN_TONES = 6;   // the tempo estimate of hand-keyed tones is shown from 6 tones on
@@ -77,36 +79,42 @@ const $ = (sel) => document.querySelector(sel);
 
 function load() {
   try {
-    const c = { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(STORE)) || {}) };
-    if (!UI_TYPES.includes(c.type)) c.type = DEFAULTS.type;
+    const st = JSON.parse(localStorage.getItem(STORE)) || {};
+    // 0.15.3: a stored app keyer type (iambicB …) becomes the HW keyer; its old fields are dropped
+    const c = { ...DEFAULTS, exKind: st.exKind, stream: st.stream, hwSidetone: st.hwSidetone === true, type: HW_TYPE };
     if (!SEND_KINDS.includes(c.exKind)) c.exKind = DEFAULTS.exKind;
-    c.wpm = Math.min(KEYER_WPM_MAX, Math.max(KEYER_WPM_MIN, Math.round(Number(c.wpm) || DEFAULTS.wpm)));
+    if (!validCode(c.stream)) c.stream = DEFAULTS.stream;
     return c;
   } catch (e) { return { ...DEFAULTS }; }
 }
 function save(cfg) { try { localStorage.setItem(STORE, JSON.stringify(cfg)); } catch (e) { /* private mode */ } }
-/** 0.13.2: the CW room uses the same key settings (type, tempo, keys) as the key page. */
+/** 0.13.2: the CW room uses the same key settings (stream key, sidetone) as the key page. */
 export const loadKeyConfig = load;
-export const saveKeyConfig = save;
-export { UI_TYPES as KEY_UI_TYPES };
 
-export function initKeyerUi({ player, ensureAudio, getChars }) {
+export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {} }) {
   const cfg = load();
-  let keyer = new Keyer(cfg);
   const S = {
-    timer: null, chainEnd: 0, elements: [], learn: null, log: [], t0: null, prev: null, presses: 0,
-    manual: null, held: { dot: false, dash: false }, sent: { dot: false, dash: false }, open: false,
-    keys: new Set(),   // codes of the keys held down (own autorepeat filter, see onKey)
+    elements: [], learn: null, learnTimer: null, log: [], t0: null, prev: null, presses: 0, manual: null, open: false,
+    input: new KeyInput(cfg),   // 0.14.1: keyboard input (autorepeat filter, HW stream) – keyinput.js
     exRec: [],         // 0.12.3: the last exercise tasks with their tones (for the recording)
+    events: [],        // 0.14.3: key events {at, code, down} for the summary (KEYLOG_MAX)
+    paddles: [],       // 0.14.0: paddle states of a HW key in mode C {side, down, at} (debug record)
+    hwDot: null,       // 0.14.0: the last measured dot of the HW stream (ms) – the hint of the decoder
+    lastDec: null,     // 0.15.4: the last decoding of the transcript (diagnostics)
   };
+  const sidetoneOn = () => cfg.hwSidetone;
+
+  /** Decoding of the tones of the page: the HW stream with machine timing (dec.tones then carry the elements). */
+  function decode(tones) {
+    if (tones.length <= 1 || S.wordHint === undefined) S.wordHint = loadWordHint(); // 0.16.3: a new record starts with the hand's threshold
+    const dec = decodeTones(tones, HW_WPM, MORSE, { machine: true, dot: S.hwDot, word: S.wordHint });
+    if (tones.length) { S.hwDot = dec.dot; saveWordHint(dec); }
+    return dec;
+  }
 
   // ---------- keying ----------
-  // D3 (0.11.3): tones in one time line in ms = the event clock (performance.now / event.timeStamp). Hand-keyed
-  // tones (straight key, bug dashes) are measured from the event time stamps (el null = the decoder classifies them
-  // by length); elements of the automatic keyer are known and converted from the audio clock. The output latency
-  // of the sound does not enter decoding.
-  const audioToEventMs = (s) => performance.now() + (s - player.ctx.currentTime) * 1000;
-
+  // D3 (0.11.3): tones in one time line in ms = the event clock (event.timeStamp); the output latency of the sound
+  // does not enter decoding.
   function addElement(el, start, end) {
     S.elements.push({ el, start, end });
     if (X.phase === 'send') exTone({ el, start, end });
@@ -114,55 +122,37 @@ export function initKeyerUi({ player, ensureAudio, getChars }) {
     renderOut();
   }
 
-  function startElement(el, at) {
-    const dur = keyer.elementMs(el) / 1000;
-    if (cfg.sidetone) player.sidetoneElement(at, at + dur);
-    const start = audioToEventMs(at);
-    addElement(el, start, start + dur * 1000);
-    S.chainEnd = at + dur + keyer.unit / 1000;
-    clearTimeout(S.timer);
-    S.timer = setTimeout(decide, Math.max(0, (S.chainEnd - player.ctx.currentTime) * 1000 - LOOK_MS));
-  }
-
-  function decide() {
-    S.timer = null;
-    const el = keyer.next();
-    if (el) startElement(el, Math.max(S.chainEnd, player.ctx.currentTime + START_S));
-  }
-
   function manualKey(down, ts) {
     if (down) {
       if (S.manual !== null) return;
       S.manual = ts;
-      if (cfg.sidetone) player.sidetoneKey(true);
+      if (sidetoneOn() && player.ready) player.sidetoneKey(true);
     } else if (S.manual !== null) {
-      if (cfg.sidetone) player.sidetoneKey(false);
+      if (sidetoneOn() && player.ready) player.sidetoneKey(false);
       addElement(null, S.manual, Math.max(S.manual, ts));
       S.manual = null;
     }
   }
 
-  /** One contact change from any source (side = physical side before swapping). */
-  function input(side, down, ts, src) {
-    logEvent(side, down, ts, src);
-    if (down) { clearTimeout(X.timer); X.timer = null; } // a task does not end while a paddle / the key is held
-    if (!player.ready) return;
-    const s = cfg.swap ? (side === 'dot' ? 'dash' : 'dot') : side;
-    const man = manualSide(cfg.type);
-    if (s === man) { manualKey(down, ts); return; }
-    if (cfg.type === 'straight') return; // the straight key has one contact only
-    if (down) { if (keyer.press(s)) decide(); } else keyer.release(s);
+  /** 0.14.0: one change of the HW stream (tone on / off) – no app keyer, no sound needed (the key plays it). */
+  function hwInput(down, ts, code) {
+    logEvent('stream', down, ts, 'hw', code);
+    if (down) {
+      onHwSeen(); // 0.15.0: the key is connected (firmware offer / the key runs again after an update)
+      if (!hwState.seen) { hwState.seen = true; renderNoKey(); }
+    }
+    if (down) { clearTimeout(X.timer); X.timer = null; }
+    manualKey(down, ts);
   }
 
   function releaseAll() {
-    clearTimeout(S.timer);
-    S.timer = null;
-    keyer.releaseAll();
     if (S.manual !== null) manualKey(false, performance.now());
-    for (const b of document.querySelectorAll('.key-paddle')) b.classList.remove('down');
-    S.held = { dot: false, dash: false };
-    S.keys.clear();
-    S.sent = { dot: false, dash: false }; // held = finger on the button, sent = the press reached the keyer
+    S.input.releaseAll();
+  }
+
+  /** 0.15.3: no stream key seen in this app session → how to connect the key (sending needs the HW key). */
+  function renderNoKey() {
+    $('#key-nokey').hidden = hwState.seen || !!S.learn;
   }
 
   // ---------- sending exercise (D3 step 3, 0.12.0): task → sending → evaluation; a series of SEND_TASKS ----------
@@ -172,7 +162,7 @@ export function initKeyerUi({ player, ensureAudio, getChars }) {
   function exTone(tone) {
     X.tones.push(tone);
     clearTimeout(X.timer);
-    const dec = decodeTones([...X.tones].sort((a, b) => a.start - b.start), keyer.wpm, MORSE);
+    const dec = decode([...X.tones].sort((a, b) => a.start - b.start));
     const wait = Math.max(SEND_END_MS, SEND_END_UNITS * dec.dot);
     X.timer = setTimeout(exFinish, Math.max(0, tone.end - performance.now()) + wait);
   }
@@ -209,8 +199,8 @@ export function initKeyerUi({ player, ensureAudio, getChars }) {
     if (X.phase !== 'send') return;
     if (S.manual !== null) return; // the key is still held
     const tones = [...X.tones].sort((a, b) => a.start - b.start);
-    const dec = decodeTones(tones, keyer.wpm, MORSE);
-    const ev = evaluateSending(X.target, tones, dec, MORSE);
+    const dec = decode(tones);
+    const ev = evaluateSending(X.target, dec.tones, dec, MORSE);
     S.exRec.push({ target: X.target, text: dec.text, tones: tones.map(rnd) });
     if (S.exRec.length > EXREC_MAX) S.exRec.shift();
     ev.text = dec.text;
@@ -315,12 +305,15 @@ export function initKeyerUi({ player, ensureAudio, getChars }) {
   }
 
   // ---------- event log (acceptance test of the converter, spec §2) ----------
-  function logEvent(side, down, ts, src) {
+  function logEvent(side, down, ts, src, code = '') {
     if (S.t0 === null) S.t0 = ts;
     const delta = S.prev === null ? null : ts - S.prev;
     S.prev = ts;
     if (down) S.presses += 1;
-    S.log.unshift({ at: ts - S.t0, side, down, src, delta });
+    S.log.unshift({ at: ts - S.t0, side, down, src, delta, code });
+    // 0.14.3: the whole record for the summary of the acceptance test (H-42 (1)); touch = the side as the key
+    S.events.push({ at: ts, code: code || `${src}:${side}`, down });
+    if (S.events.length > KEYLOG_MAX) S.events.shift();
     if (S.log.length > LOG_MAX) S.log.length = LOG_MAX;
     renderLog();
   }
@@ -329,17 +322,18 @@ export function initKeyerUi({ player, ensureAudio, getChars }) {
   function renderOut() {
     // bug: a hand dash is stored at its release, automatic dots when scheduled → keep the decoder input in time order
     const tones = [...S.elements].sort((x, y) => x.start - y.start);
-    const r = decodeTones(tones, keyer.wpm, MORSE);
+    const r = decode(tones);
+    S.lastDec = r;
+    if ($('#key-diag-box').open) renderDiag();
     $('#key-text').textContent = r.text || '–';
     $('#key-codes').textContent = r.codes.slice(-12).join(' ');
-    const hand = S.elements.filter((e) => !e.el).length;
-    $('#key-est').textContent = hand >= EST_MIN_TONES
-      ? t('key.estimate', { wpm: Math.round(r.wpm), ratio: f1(r.dash / r.dot) }) : '';
+    $('#key-est').textContent = tones.length >= EST_MIN_TONES ? t('key.estimateHw', { wpm: Math.round(r.wpm) }) : '';
     // D3 (0.11.4): form of free sending over the last EVAL_WINDOW tones
     const box = $('#key-eval');
     if (X.on || tones.length < EVAL_MIN_TONES) { box.textContent = ''; box.hidden = true; return; }
     const win = tones.slice(-EVAL_WINDOW);
-    const m = sendMetrics(win, decodeTones(win, keyer.wpm, MORSE));
+    const dw = decode(win);
+    const m = sendMetrics(dw.tones, dw);
     box.hidden = false;
     renderEval(box, m);
     const h = document.createElement('p');
@@ -348,73 +342,163 @@ export function initKeyerUi({ player, ensureAudio, getChars }) {
     box.prepend(h);
   }
 
+  // ---------- 0.15.4: how the decoder reads (the last words gap by gap) ----------
+  function diagLines() {
+    const d = S.lastDec && gapDiagnostics(S.lastDec, MORSE);
+    if (!d || !d.rows.length) return null;
+    const n = (x) => fmtNum(x, 1);
+    const head = t('key.diag.head', { dot: Math.round(d.dot), wpm: Math.round(d.wpm), split: n(d.split), word: n(d.word) });
+    const rows = d.rows.map((r) => {
+      const ch = r.ch === '' ? t('key.diag.fix') : (r.ch ?? t('key.diag.unknown'));
+      let line = r.before === null ? t('key.diag.rowFirst', { ch, code: r.code })
+        : t('key.diag.row', { ch, code: r.code, before: n(r.before), kind: t(`key.diag.kind${r.kind}`) });
+      if (r.close) line = `⚠ ${line}`;
+      if (r.inMax !== null) line += ` · ${r.inClose ? '⚠ ' : ''}${t('key.diag.inside', { x: n(r.inMax) })}`;
+      return { line, close: r.close || r.inClose };
+    });
+    return { head, rows };
+  }
+
+  function renderDiag() {
+    const d = diagLines();
+    const ol = $('#key-diag');
+    ol.textContent = '';
+    $('#key-diag-head').textContent = d ? d.head : t('key.diag.empty');
+    if (!d) return;
+    for (const r of d.rows) {
+      const li = document.createElement('li');
+      li.textContent = r.line;
+      if (r.close) li.className = 'close';
+      ol.append(li);
+    }
+  }
+
   function renderLog() {
     const tb = $('#key-log');
     tb.textContent = '';
     for (const e of S.log) {
       const tr = document.createElement('tr');
-      const cells = [e.at.toFixed(1), `${e.src} ${t(`key.side.${e.side}`)}`, e.down ? '↓' : '↑',
+      const cells = [e.at.toFixed(1), `${e.src} ${t(`key.side.${e.side}`)}`, e.code, e.down ? '↓' : '↑',
         e.delta === null ? '' : `+${e.delta.toFixed(1)}`];
       for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.append(td); }
       tb.append(tr);
     }
     $('#key-log-count').textContent = t('key.logCount', { n: S.presses });
+    // the summary only while the log is open (it runs over up to KEYLOG_MAX events on every key change)
+    if ($('#key-log').closest('details').open) $('#key-log-sum').textContent = sumLines(logSummary(S.events)).join('\n');
+  }
+
+  // ---------- summary of the event log for the HW project (0.14.3, H-42 (1)) ----------
+  function sumLines(sum) {
+    const ms = (x) => f1(x);
+    const grp = (key, g) => `  ${t(key, { n: g.n, med: ms(g.med), min: ms(g.min), max: ms(g.max) })}`;
+    const out = [t('key.logSum.head', { n: sum.events, s: f1(sum.ms / 1000) })];
+    for (const k of sum.keys) {
+      out.push(t('key.logSum.key', { code: k.code, n: k.n }));
+      if (k.dot) out.push(grp('key.logSum.dot', k.dot), grp('key.logSum.dash', k.dash));
+      else if (k.all) out.push(grp('key.logSum.all', k.all));
+      if (k.wpm) out.push(`  ${t('key.logSum.wpm', { wpm: f1(k.wpm) })}`);
+    }
+    out.push(t('key.logSum.err', { dup: sum.dup, orphan: sum.orphan, open: sum.open }));
+    return out;
+  }
+
+  function logText() {
+    const t0 = S.events.length ? S.events[0].at : 0;
+    let prev = null;
+    const rows = S.events.map((e) => {
+      const r = `${(e.at - t0).toFixed(1)}\t${e.code}\t${e.down ? 'down' : 'up'}\t${prev === null ? '' : `+${(e.at - prev).toFixed(1)}`}`;
+      prev = e.at;
+      return r;
+    });
+    return [`${t('app.title')} ${new Date().toISOString()}`, `UA: ${navigator.userAgent}`,
+      `${t('key.type')}: ${cfg.type} (${cfg.stream})`, ...sumLines(logSummary(S.events)), '',
+      'ms\tcode\tevent\tdelta', ...rows].join('\n');
+  }
+
+  // ---------- learning the keys with confirmation (0.13.11, keylearn.js) ----------
+  function learnStart() {
+    releaseAll();
+    S.learn = new KeyLearn(['stream']);
+    renderMap();
+  }
+
+  function learnEnd() {
+    clearTimeout(S.learnTimer);
+    S.learnTimer = null;
+    const kl = S.learn;
+    S.learn = null;
+    if (kl && kl.phase === 'done') {
+      hwState.seen = true;   // a key gesture of the stream arrived (the key is connected)
+      Object.assign(cfg, kl.result);
+      apply();
+    } else renderMap();
+  }
+
+  /** After every learning event: finished / cancelled → end, a gesture running → wake up when its silence is over. */
+  function learnUpdate() {
+    const kl = S.learn;
+    if (!kl) return;
+    if (!kl.active) { learnEnd(); return; }
+    clearTimeout(S.learnTimer);
+    S.learnTimer = null;
+    const due = kl.dueAt();
+    if (due !== null) {
+      S.learnTimer = setTimeout(() => { S.learnTimer = null; kl.tick(performance.now()); learnUpdate(); },
+        Math.max(0, due - performance.now()) + 5);
+    }
+    renderMap();
   }
 
   function renderMap() {
-    $('#key-map').textContent = S.learn
-      ? t(S.learn === 'dot' ? 'key.learnDot' : 'key.learnDash')
-      : t('key.map', { dot: cfg.dot, dash: cfg.dash });
+    const kl = S.learn;
+    const box = $('#key-learn-box');
+    box.hidden = !kl;
+    if (!kl) {
+      $('#key-map').textContent = t('key.mapHw', { code: cfg.stream });
+      renderNoKey();
+      return;
+    }
+    renderNoKey();
+    $('#key-map').textContent = t('key.learnStream');
+    const confirm = kl.phase === 'confirm';
+    let msg = '';
+    if (kl.phase === 'gesture') msg = t('key.learnHeld');
+    else if (confirm) msg = t('key.learnGot.stream', { code: kl.code });   // one step only – no clash of two keys
+    $('#key-learn-msg').textContent = msg;
+    $('#key-learn-ok').hidden = !confirm || !!kl.error;
+    $('#key-learn-again').hidden = !confirm;
   }
 
   function renderControls() {
-    const sel = $('#key-type');
-    if (!sel.options.length) {
-      for (const k of UI_TYPES) {
-        const o = document.createElement('option');
-        o.value = k;
-        sel.append(o);
-      }
-    }
-    for (const o of sel.options) o.textContent = t(`key.type.${o.value}`);
-    sel.value = cfg.type;
-    $('#key-wpm-val').textContent = `${cfg.wpm} WPM`;
-    $('#key-swap').checked = cfg.swap;
-    $('#key-sidetone').checked = cfg.sidetone;
-    const straight = cfg.type === 'straight';
-    $('#key-dash').hidden = straight;
-    $('#key-dot').textContent = t(straight ? 'key.straightBtn' : 'key.dot');
-    $('#key-type-hint').textContent = t(`key.typeHint.${cfg.type}`);
+    $('#key-sidetone').checked = sidetoneOn();
     renderMap();
   }
 
   function apply() {
     save(cfg);
     releaseAll();
-    keyer = new Keyer(cfg);
     renderControls();
     renderOut();
   }
 
   // ---------- controls ----------
-  $('#key-type').addEventListener('change', (e) => { cfg.type = e.target.value; apply(); });
   $('#send-ex-kind').addEventListener('change', (e) => { cfg.exKind = e.target.value; save(cfg); });
   $('#send-ex-start').addEventListener('click', () => { if (!player.ready) ensureAudio(); exStart(); });
   $('#send-ex-again').addEventListener('click', exStart);
   $('#send-ex-done').addEventListener('click', exFinish);
   $('#send-ex-next').addEventListener('click', exNext);
   $('#send-ex-stop').addEventListener('click', exStop);
-  for (const [id, d] of [['#key-wpm-minus', -1], ['#key-wpm-plus', 1]]) {
-    $(id).addEventListener('click', () => {
-      cfg.wpm = Math.min(KEYER_WPM_MAX, Math.max(KEYER_WPM_MIN, cfg.wpm + d));
-      apply();
-    });
-  }
-  $('#key-swap').addEventListener('change', (e) => { cfg.swap = e.target.checked; apply(); });
-  $('#key-sidetone').addEventListener('change', (e) => { cfg.sidetone = e.target.checked; apply(); });
-  $('#key-learn').addEventListener('click', () => { releaseAll(); S.learn = 'dot'; renderMap(); });
+  $('#key-sidetone').addEventListener('change', (e) => { cfg.hwSidetone = e.target.checked; apply(); });
+  $('#key-learn').addEventListener('click', learnStart);
+  $('#key-learn-ok').addEventListener('click', () => { if (S.learn) { S.learn.confirm(); learnUpdate(); } });
+  $('#key-learn-again').addEventListener('click', () => { if (S.learn) { S.learn.retry(); learnUpdate(); } });
+  $('#key-learn-cancel').addEventListener('click', () => { if (S.learn) { S.learn.cancel(); learnUpdate(); } });
   $('#key-map-reset').addEventListener('click', () => {
-    S.learn = null; cfg.dot = DEFAULTS.dot; cfg.dash = DEFAULTS.dash; apply();
+    if (S.learn) S.learn.cancel();
+    learnEnd();
+    cfg.stream = DEFAULTS.stream;
+    apply();
   });
   // 0.12.3 (validation #31): the raw tones on request into the debug record (accounts with tracing only)
   $('#key-rec-send').addEventListener('click', async () => {
@@ -424,49 +508,61 @@ export function initKeyerUi({ player, ensureAudio, getChars }) {
     const t0 = tones.length ? tones[0].start : 0;
     traceBegin(TRACE_KEY, null);
     traceEnd(null, {
-      type: cfg.type, wpm: cfg.wpm, meant: $('#key-rec-text').value.trim().slice(0, 200),
-      text: decodeTones(tones, keyer.wpm, MORSE).text, ua: navigator.userAgent.slice(0, 200),
+      type: cfg.type, wpm: S.hwDot ? Math.round(1200 / S.hwDot) : HW_WPM, meant: $('#key-rec-text').value.trim().slice(0, 200),
+      text: decode(tones).text, ua: navigator.userAgent.slice(0, 200),
       tones: tones.map((tn) => rnd({ ...tn, start: tn.start - t0, end: tn.end - t0 })), ex: S.exRec,
+      stream: cfg.stream, paddles: S.paddles.map((p) => ({ ...p, at: Math.round((p.at - t0) * 10) / 10 })),
     });
     st.textContent = t('key.rec.sending');
     try { await flushTrace(); st.textContent = t('key.rec.sent'); } catch (e) { st.textContent = t('key.rec.fail'); }
   });
-  $('#key-clear').addEventListener('click', () => {
-    S.elements = []; S.log = []; S.t0 = null; S.prev = null; S.presses = 0;
+  function clearOut() {
+    S.elements = []; S.log = []; S.t0 = null; S.prev = null; S.presses = 0; S.paddles = []; S.events = [];
     renderOut(); renderLog();
-  });
-
-  // on-screen paddles: pointer capture keeps the press even when the finger slides off; two fingers = squeeze
-  for (const [id, side] of [['#key-dot', 'dot'], ['#key-dash', 'dash']]) {
-    const b = $(id);
-    const up = (e) => {
-      if (!S.held[side]) return;
-      S.held[side] = false;
-      b.classList.remove('down');
-      if (S.sent[side]) { S.sent[side] = false; input(side, false, e.timeStamp, 'touch'); }
-    };
-    b.addEventListener('pointerdown', async (e) => {
-      e.preventDefault();
-      try { b.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
-      if (S.held[side]) return;
-      S.held[side] = true;
-      b.classList.add('down');
-      const ts = e.timeStamp;
-      if (!player.ready) await ensureAudio();
-      if (!S.held[side] || S.sent[side]) return; // released while the first touch unlocked the audio
-      S.sent[side] = true;
-      input(side, true, ts, 'touch');
-    });
-    b.addEventListener('pointerup', up);
-    b.addEventListener('pointercancel', up);
-    b.addEventListener('lostpointercapture', up);
-    b.addEventListener('contextmenu', (e) => e.preventDefault());
   }
-  window.addEventListener('blur', () => { if (S.open) releaseAll(); });
+  $('#key-clear').addEventListener('click', clearOut);
+  $('#key-diag-box').addEventListener('toggle', renderDiag);
+  $('#key-diag-copy').addEventListener('click', async () => {
+    const d = diagLines();
+    const st = $('#key-diag-status');
+    if (!d) { st.textContent = t('key.diag.empty'); return; }
+    try {
+      await navigator.clipboard.writeText([d.head, ...d.rows.map((r) => r.line)].join('\n'));
+      st.textContent = t('key.logCopied');
+    } catch (e) {
+      st.textContent = t('key.diag.copyFail');
+    }
+  });
+  $('#key-log').closest('details').addEventListener('toggle', renderLog);
+  $('#key-log-copy').addEventListener('click', async () => {
+    const st = $('#key-log-copy-status');
+    const text = logText();
+    const area = $('#key-log-text');
+    try {
+      await navigator.clipboard.writeText(text);
+      area.hidden = true;
+      st.textContent = t('key.logCopied');
+    } catch (e) {
+      // no clipboard (permission, old browser): show the text to be selected by hand
+      area.value = text;
+      area.hidden = false;
+      area.select();
+      st.textContent = t('key.logCopyFail');
+    }
+  });
+  const lost = () => {
+    if (!S.open) return;
+    releaseAll();
+    if (S.learn) { S.learn.releaseAll(performance.now()); learnUpdate(); }
+  };
+  window.addEventListener('blur', lost);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) lost(); });
 
   return {
     render() {
       S.open = true;
+      // 0.14.2: the CW Chat may have changed the shared key settings meanwhile
+      Object.assign(cfg, load());
       // 0.11.1 (#28): opening the page is a tap too → unlock the audio now, the keep-alive tone (main.js) then keeps
       // the phone output running, so the first press is not cut
       if (!player.ready) ensureAudio();
@@ -474,11 +570,13 @@ export function initKeyerUi({ player, ensureAudio, getChars }) {
       renderOut();
       renderLog();
       renderEx();
+      renderNoKey();
       $('#key-rec').hidden = !traceOn();
     },
     stop() {
       S.open = false;
-      S.learn = null;
+      if (S.learn) S.learn.cancel();
+      learnEnd();
       releaseAll();
       player.sidetoneOff();
       // leaving the page (or hiding it) interrupts a task in progress: it starts again with no tones
@@ -489,41 +587,28 @@ export function initKeyerUi({ player, ensureAudio, getChars }) {
     /** keydown / keyup on the key page; true = handled (the caller prevents the default – Ctrl shortcuts). */
     onKey(e, down) {
       if (S.learn) {
-        if (!down || e.repeat) return true;
-        if (e.code === 'Escape') { S.learn = null; renderMap(); return true; }
-        cfg[S.learn] = e.code;
-        if (S.learn === 'dot') { S.learn = 'dash'; renderMap(); return true; }
-        S.learn = null;
-        if (cfg.dash === cfg.dot) cfg.dash = DEFAULTS.dash === cfg.dot ? DEFAULTS.dot : DEFAULTS.dash;
-        apply();
+        // 0.13.11: one gesture per step, then a confirmation (a USB key sends several keys for one paddle press)
+        S.learn.key(e.code, down, e.timeStamp, e.repeat);
+        learnUpdate();
         return true;
       }
-      const side = e.code === cfg.dot ? 'dot' : (e.code === cfg.dash ? 'dash' : null);
-      if (!side && X.on && (e.code === 'Enter' || e.code === 'NumpadEnter')) {
-        if (down && !e.repeat) { if (X.phase === 'send') exFinish(); else if (X.phase === 'result') exNext(); }
-        return true;
+      // 0.14.1: shared keyboard input (keyinput.js): own autorepeat filter, HW stream and the paddle states (mode C)
+      const acts = S.input.key(e.code, down);
+      if (acts === null) {
+        if (X.on && (e.code === 'Enter' || e.code === 'NumpadEnter')) {
+          if (down && !e.repeat) { if (X.phase === 'send') exFinish(); else if (X.phase === 'result') exNext(); }
+          return true;
+        }
+        return false;
       }
-      if (!side) return false;
-      // autorepeat of the OS (spec K-06, A-02) by own state, not e.repeat: on Windows the second Ctrl held together
-      // with the first one arrives marked as a repeat (one virtual key Ctrl) and the squeeze was lost (validation #33)
-      if (down) {
-        if (S.keys.has(e.code)) return true;
-        S.keys.add(e.code);
-      } else {
-        if (!S.keys.has(e.code)) return true;
-        S.keys.delete(e.code);
-        // releasing both Ctrl keys may report only one keyup → nothing held with Ctrl as a modifier = release all
-        if (!e.ctrlKey) {
-          for (const code of [...S.keys]) {
-            if (code.startsWith('Control')) {
-              S.keys.delete(code);
-              input(code === cfg.dot ? 'dot' : 'dash', false, e.timeStamp, 'kbd');
-            }
-          }
+      for (const a of acts) {
+        if (a.kind === 'stream') hwInput(a.down, e.timeStamp, e.code);
+        else if (a.kind === 'paddle') {
+          logEvent(a.side, a.down, e.timeStamp, 'hw', e.code);
+          S.paddles.push({ side: a.side, down: a.down, at: e.timeStamp });
+          if (S.paddles.length > PADDLES_MAX) S.paddles.shift();
         }
       }
-      if (down && !player.ready) { ensureAudio(); }
-      input(side, down, e.timeStamp, 'kbd');
       return true;
     },
   };

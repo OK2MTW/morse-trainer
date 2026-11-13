@@ -5,11 +5,11 @@ import re
 import secrets
 from datetime import timedelta
 
-from flask import Blueprint, Response, g, jsonify, request
+from flask import Blueprint, Response, g, jsonify, request, send_file
 
 from server import admission, auth, i18n
 from server.auth import ROLE_ADMIN, ROLE_COACH, ROLE_STUDENT, iso, login_required, now, sha256
-from server import coach
+from server import coach, firmware, visits
 from server.coach import MODE_CHAR, MODE_COPY, MODE_HEAD
 from server.cwroom import is_minor
 from server.db import get_db
@@ -60,8 +60,10 @@ def user_json(row_or_dict):
 # ================= login =================
 @bp.get("/me")
 def me():
+    visits.record(get_db(), g.user is not None)  # 0.14.5: every page load asks /api/me
     if g.user is None:
         return auth.auth_error()
+    firmware.check_soon()  # 0.15.2: the app opened by a logged-in user = a login → new HW key firmware? (throttled)
     return jsonify(user=g.user, csrf=g.session["csrf"])
 
 
@@ -94,6 +96,7 @@ def login():
     resp = jsonify(user=user_json(row))
     csrf = auth.create_session(resp, row["id"], device_of(d.get("device")))
     resp.set_data(json.dumps({"user": user_json(row), "csrf": csrf}))
+    firmware.check_soon()  # 0.15.2: every login asks GitHub for a new HW key firmware (background, throttled)
     return resp
 
 
@@ -377,12 +380,64 @@ def invite_delete(inv_id):
     return jsonify(ok=True) if n else err(t("err.inviteNotFound"), 404)
 
 
+@bp.get("/visits")
+@login_required(ROLE_ADMIN)
+def visits_summary():
+    """0.14.5: visit counter for the administrator (User management)."""
+    days = request.args.get("days", "14")
+    days = max(1, min(visits.MAX_DAYS, int(days))) if days.isdigit() else 14
+    return jsonify(visits.summary(get_db(), days))
+
+
+@bp.get("/visits/public")
+def visits_public():
+    """0.14.6: public visit counter (login page and home), no login needed."""
+    return jsonify(visits.public(get_db()))
+
+
+# ================= HW key firmware (0.15.0) =================
+def _fw_allowed():
+    return g.user["key_lab"] or g.user["role"] == ROLE_ADMIN
+
+
+@bp.get("/fw")
+@login_required()
+def fw_info():
+    """The newest CwKey release the Pi has downloaded and checked (server/firmware.py), for the key page."""
+    if not _fw_allowed():
+        return err(t("err.forbidden"), 403)
+    rels = firmware.releases()
+    out = {"release": rels[0] if rels else None, "older": [{k: r[k] for k in ("version", "released", "family", "targets")}
+                                                          for r in rels[1:]]}   # 0.15.1: a way back
+    if g.user["role"] == ROLE_ADMIN:
+        out["sync"] = firmware.state()
+    return jsonify(out)
+
+
+@bp.get("/fw/<version>/<name>")
+@login_required()
+def fw_file(version, name):
+    if not _fw_allowed():
+        return err(t("err.forbidden"), 403)
+    path = firmware.file_path(version, name)
+    if path is None:
+        return err(t("err.fwNotFound"), 404)
+    return send_file(path, mimetype="application/octet-stream", as_attachment=True, download_name=name, max_age=0)
+
+
+@bp.post("/fw/check")
+@login_required(ROLE_ADMIN)
+def fw_check():
+    """The administrator asks for a check now (otherwise once a day)."""
+    return jsonify(firmware.sync_now())
+
+
 # ================= user management =================
 @bp.get("/users")
 @login_required(ROLE_ADMIN, ROLE_COACH)
 def users_list():
     sql = ("SELECT u.id, u.nick, u.role, u.age_group, u.created_at, u.last_login_at, u.disabled, u.group_id, "
-           "u.cw_off, u.cw_kids, u.invited_by, (SELECT c.nick FROM users c WHERE c.id = u.invited_by) AS coach_nick, "
+           "u.cw_off, u.cw_kids, u.key_lab, u.invited_by, (SELECT c.nick FROM users c WHERE c.id = u.invited_by) AS coach_nick, "
            "(SELECT COUNT(*) FROM lessons l WHERE l.user_id = u.id) AS lessons, "
            "(SELECT MAX(at) FROM lessons l WHERE l.user_id = u.id) AS last_lesson, "
            "(SELECT level FROM progress p WHERE p.user_id = u.id) AS level FROM users u")
@@ -491,6 +546,19 @@ def user_group(uid):
             return err(t("err.groupNotFound"), 404)
     db.execute("UPDATE users SET group_id = ? WHERE id = ?", (gid, uid))
     cw_room_changed()
+    return jsonify(ok=True)
+
+
+@bp.put("/users/<int:uid>/key-lab")
+@login_required(ROLE_ADMIN, ROLE_COACH)
+def user_key_lab(uid):
+    """0.14.4: opens (or closes) the telegraph key page to one student of the trainer (coaches always have it)."""
+    db = get_db()
+    row = db.execute("SELECT role, invited_by FROM users WHERE id = ?", (uid,)).fetchone()
+    if row is None or row["role"] != ROLE_STUDENT or (g.user["role"] != ROLE_ADMIN
+                                                      and row["invited_by"] != g.user["id"]):
+        return err(t("err.userNotFound"), 404)
+    db.execute("UPDATE users SET key_lab = ? WHERE id = ?", (1 if body().get("on") else 0, uid))
     return jsonify(ok=True)
 
 
@@ -1184,6 +1252,7 @@ def export():
         **load_user_data(db, g.user["id"], limit=1_000_000, detail=True),
         "coach": coach_row(db, g.user["id"]),
         "vocab": vocab_data(db, g.user["id"], sessions=1_000_000),
+        "cw": cw_export(db, g.user["id"]),
     }
     traces = db.execute("SELECT lesson_id, kind, at, data FROM traces WHERE user_id = ? ORDER BY at",
                         (g.user["id"],)).fetchall()
@@ -1194,6 +1263,18 @@ def export():
     resp = Response(json.dumps(data, ensure_ascii=False, indent=1), mimetype="application/json")
     resp.headers["Content-Disposition"] = f'attachment; filename="{t("export.filename")}"'
     return resp
+
+
+def cw_export(db, uid):
+    """0.13.10: what the trainer groups and the CW Chat keep about the user (the room itself lives only in memory)."""
+    me = db.execute("SELECT u.cw_off, u.cw_kids, g.name AS grp, c.nick AS coach FROM users u "
+                    "LEFT JOIN coach_groups g ON g.id = u.group_id LEFT JOIN users c ON c.id = u.invited_by "
+                    "WHERE u.id = ?", (uid,)).fetchone()
+    blocked = db.execute("SELECT u.nick, b.created_at FROM cw_blocks b JOIN users u ON u.id = b.blocked_id "
+                         "WHERE b.user_id = ? ORDER BY b.created_at", (uid,)).fetchall()
+    groups = db.execute("SELECT name, created_at FROM coach_groups WHERE coach_id = ? ORDER BY name", (uid,)).fetchall()
+    return {"coach": me["coach"], "group": me["grp"], "room_off": bool(me["cw_off"]), "kids": bool(me["cw_kids"]),
+            "blocked": [dict(r) for r in blocked], "own_groups": [dict(r) for r in groups]}
 
 
 @bp.post("/account/delete")

@@ -299,6 +299,7 @@ table.weeks tr.current td { font-weight: 600; }
 .hero-sign { margin: 0 0 12px; font: 600 1rem/1.3 ui-monospace, "SFMono-Regular", Menlo, monospace; color: #ffb703; letter-spacing: .06em; }
 .hero-licence { position: relative; z-index: 1; margin: 0; font-size: .85rem; color: rgba(232, 238, 252, .75); }
 .hero-licence a { color: #9cc3ff; }
+.hero-visits { margin-top: 6px; font-size: .8rem; }
 @media (prefers-reduced-motion: reduce) {
   .cw-key > * { animation: none !important; opacity: .9; }
 }
@@ -373,14 +374,20 @@ table.weeks tr.current td { font-weight: 600; }
   .vp-blank { flex: 1; border-bottom: .5pt dotted #777; min-height: 1.1em; }
   .vp-foot { margin-top: 10pt; font-size: 8pt; color: #555; }
 }
-/* VK (0.11.0): telegraph key page – two large paddles, no selection / long-press menu, pressed state */
-.key-paddles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
-.key-paddles:has(#key-dash[hidden]) { grid-template-columns: 1fr; }
-.key-paddle {
-  min-height: 140px; font-size: 1.6rem; font-weight: 700; border-radius: 16px;
-  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
-}
-.key-paddle.down { background: var(--accent); color: #fff; }
+/* VK (0.11.0): telegraph key page (0.15.3: HW key only, no on-screen paddles) */
+.key-hw-detect, .key-learn { border: 2px solid var(--accent); border-radius: 8px; padding: 4px 12px; margin: 8px 0; }
+.fw-wizard { border-top: 1px solid var(--muted); margin-top: 8px; }
+.fw-wizard li { margin: 6px 0; }
+.fw-wizard li button, .fw-wizard li label { display: block; margin-top: 6px; }
+.fw-midi-row { display: block; margin: 8px 0 4px; }
+#fw-boot { display: block; margin-top: 6px; }
+#fw-boot[hidden] { display: none; }
+.fw-notes { white-space: pre-wrap; font-size: .85rem; max-height: 16em; overflow: auto; }
+#fw-msg.bad { color: var(--bad); }
+.key-log-sum { white-space: pre-wrap; font-size: .85rem; margin: 6px 0; }
+.key-log-text { width: 100%; font-family: monospace; font-size: .8rem; }
+.key-diag { font-family: monospace; font-size: .85rem; padding-left: 1.6rem; }
+.key-diag li.close { color: var(--bad); font-weight: 600; }
 .key-text { font-family: monospace; font-size: 1.4rem; min-height: 1.6em; word-break: break-word; margin: 8px 0 2px; }
 .key-codes { font-family: monospace; word-break: break-word; }
 .send-ex { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 8px; }
@@ -411,7 +418,8 @@ details.user-edit summary { cursor: pointer; color: var(--accent); font-size: .8
 .cw-user { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-bottom: 1px solid var(--line); }
 .cw-user.knock { background: var(--q2); border-radius: 8px; animation: cw-knock 1s ease-in-out 3; }
 @keyframes cw-knock { 50% { transform: translateX(3px); } }
-.cw-user.vo, .cw-user.st-off, .cw-user.st-app { opacity: .7; }
+.cw-user.st-off, .cw-user.st-app { opacity: .7; }
+.cw-user.vo { cursor: pointer; }
 .cw-user.empty { color: var(--muted); font-size: .9rem; }
 .cw-user:not(.vo):not(.empty) { cursor: pointer; }
 .cw-user.can-knock:hover { background: var(--q2); border-radius: 8px; }
@@ -434,13 +442,11 @@ details.user-edit summary { cursor: pointer; color: var(--accent); font-size: .8
 .cw-blocked li { padding: 4px 0; }
 .cw-blocked button { padding: 4px 8px; font-size: .8rem; }
 /* 0.13.2 channel */
-.cw-paddles:has(#cw-dash[hidden]) { grid-template-columns: 1fr; }
 .cw-state { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 4px 0 8px; }
 .cw-trx { font-weight: bold; font-size: 1.1rem; padding: 4px 12px; border-radius: 8px; border: 2px solid var(--line); }
 .cw-trx.tx { background: #cf222e; border-color: #cf222e; color: #fff; }
 .cw-trx.rx { background: #1a7f37; border-color: #1a7f37; color: #fff; }
 .cw-trx.free { color: var(--muted); }
-.cw-paddles .key-paddle.locked { opacity: .4; }
 .cw-settings summary { cursor: pointer; color: var(--muted); font-size: .9rem; margin: 6px 0; }
 /* 0.13.3 transcripts */
 .cw-log { list-style: none; margin: 8px 0; padding: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
-// 0.13.2 – CW room channel: keying with the shared keyer (keyer.js, settings of the key page), batches to the server,
+// 0.13.2 – CW room channel: keying with the HW key (0.15.3: the stream of the HW keyer only, settings of the key
+// page), batches to the server,
 // taking the channel by the first key down, playing the other station on the band (band.js LiveBand) with the reserve
 // of cwlink.js, the TX / RX / free label and the measured delay. Half duplex like on the air: while the other station
 // holds the channel (or its over still sounds here) the key is blocked.
 import { t, fmtNum } from './i18n.js';
 import { api, ApiError } from './api.js';
-import { Keyer, manualSide, KEYER_WPM_MIN, KEYER_WPM_MAX } from './keyer.js';
-import { loadKeyConfig, saveKeyConfig, KEY_UI_TYPES } from './keyerui.js';
+import { loadKeyConfig, HW_WPM } from './keyerui.js';
+import { KeyInput, hwState } from './keyinput.js';
 import { LiveBand, bandParams } from './band.js';
-import { decodeTones } from './decoder.js';
+import { decodeTones, loadWordHint, saveWordHint } from './decoder.js';
 import { MORSE } from './charset.js';
 import { TxOver, RxPlayout, BATCH_MS, BATCH_SLOW_MS, POLL_MS, POLL_RX_MS, POLL_TX_MS } from './cwlink.js';
 
@@ -20,10 +21,8 @@ const CW_PRESETS = ['clean', 'qsb', 'flutter', 'qrn', 'qrm', 'evening'];
 const PREFS_DEFAULT = { noise: 'min', preset: 'clean', showTx: true, showRx: false };
 const LOG_MAX = 30;          // transcript lines kept
 const PEER_OFFSET_HZ = 50;   // the other station sounds 50 Hz above the own sidetone
-const LOOK_MS = 12;          // as keyerui.js
-const START_S = 0.003;
 const BUSY_NOTE_MS = 2500;
-const AHEAD_MS = 50;         // automatic elements are known a moment before they sound
+const AHEAD_MS = 50;         // elements are sent once they have started (+ this margin)
 const CHANNEL_RX = 'rx';
 
 function loadPrefs() {
@@ -42,17 +41,17 @@ function savePrefs(p) { try { localStorage.setItem(STORE, JSON.stringify(p)); } 
 export function initCwChannel({ player, ensureAudio, pollSoon }) {
   const prefs = loadPrefs();
   let cfg = loadKeyConfig();
-  let keyer = new Keyer(cfg);
   const C = {
     on: false, peer: null, band: new LiveBand(player), rx: new RxPlayout(), tx: null, txTimer: null,
-    flushing: false, batchMs: BATCH_MS, channel: 'free', peerIds: [], chainEnd: 0, timer: null, manual: null,
-    keys: new Set(), held: { dot: false, dash: false }, sent: { dot: false, dash: false }, doneTimer: null,
-    busyNote: 0, txTones: [], rxEls: new Map(), lines: [], peerNick: '',
+    flushing: false, batchMs: BATCH_MS, channel: 'free', peerIds: [], manual: null,
+    input: new KeyInput(cfg), doneTimer: null, busyNote: 0, txTones: [], rxEls: new Map(), lines: [], peerNick: '',
+    dot: 1200 / HW_WPM,   // the measured dot of the own key (ms) – the end of an over is a silence of 7 dots
   };
 
   const toCtx = (ms) => player.ctx.currentTime + (ms - performance.now()) / 1000;
-  const audioToEventMs = (s) => performance.now() + (s - player.ctx.currentTime) * 1000;
-  const keyDown = () => C.manual !== null || keyer.down.dot || keyer.down.dash || keyer.busy;
+  const keyDown = () => C.manual !== null;
+  // 0.14.2 (spec A-16): a HW keyer – the stream goes out as it is, the key plays the sidetone
+  const sidetoneOn = () => cfg.hwSidetone;
 
   /** The other station holds the channel or its over still sounds here. */
   function blocked() {
@@ -99,7 +98,7 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
     if (!o.id) { if (!o.inflight) sendStart(o); return; }
     const now = performance.now();
     let els = o.batch(now + AHEAD_MS);
-    const end = o.silent(now, keyer.unit, keyDown());
+    const end = o.silent(now, C.dot, keyDown());
     if (end) els = els.concat(o.rest());
     if (!els.length && !end) return;
     C.flushing = true;
@@ -127,7 +126,7 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
   }
 
   /** An element of the own over (event ms). A very long over continues as a new one (server limit 2 min). */
-  function txElement(start, end, el = null) {
+  function txElement(start, end) {
     if (C.tx && C.tx.tooLong(start)) {
       const o = C.tx;
       const els = o.rest();
@@ -136,9 +135,9 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
       if (o.id) api('POST', '/cw/tx', { over: o.id, els, end: true }).catch(() => {});
     }
     const fresh = !C.tx;
-    if (fresh) { C.tx = new TxOver(start); C.txTones = []; }
+    if (fresh) { C.tx = new TxOver(start); C.txTones = []; C.wordHint = loadWordHint(); }
     C.tx.add(start, end);
-    C.txTones.push({ start, end, el });
+    C.txTones.push({ start, end, el: null });
     renderLog();
     if (fresh) { renderTrx(); sendStart(C.tx); startTimer(); }   // the first element goes with the start
   }
@@ -163,57 +162,31 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
     setTimeout(renderTrx, BUSY_NOTE_MS + 50);
   }
 
-  // ---------- keyer (the same driving as keyerui.js) ----------
-  function startElement(el, at) {
-    const dur = keyer.elementMs(el) / 1000;
-    if (cfg.sidetone) player.sidetoneElement(at, at + dur);
-    const start = audioToEventMs(at);
-    txElement(start, start + dur * 1000, el);
-    C.chainEnd = at + dur + keyer.unit / 1000;
-    clearTimeout(C.timer);
-    C.timer = setTimeout(decide, Math.max(0, (C.chainEnd - player.ctx.currentTime) * 1000 - LOOK_MS));
-  }
-
-  function decide() {
-    C.timer = null;
-    if (!C.on) return;
-    const el = keyer.next();
-    if (el) startElement(el, Math.max(C.chainEnd, player.ctx.currentTime + START_S));
-  }
-
+  // ---------- keying (HW stream) ----------
   function manualKey(down, ts) {
     if (down) {
       if (C.manual !== null) return;
       C.manual = ts;
       ensureOver(ts);   // the first key down takes the channel at once
-      if (cfg.sidetone) player.sidetoneKey(true);
+      if (sidetoneOn() && player.ready) player.sidetoneKey(true);
     } else if (C.manual !== null) {
-      if (cfg.sidetone) player.sidetoneKey(false);
+      if (sidetoneOn() && player.ready) player.sidetoneKey(false);
       const s = C.manual;
       C.manual = null;
-      if (C.tx) { C.tx.add(s, Math.max(s, ts)); C.txTones.push({ start: s, end: Math.max(s, ts), el: null }); renderLog(); }
+      if (C.tx) txElement(s, Math.max(s, ts));   // (a very long over continues as a new one)
     }
   }
 
-  function input(side, down, ts) {
-    if (!C.on || !player.ready) return;
+  /** 0.14.2: one change of the HW stream – sent as a hand-keyed tone; no sound is needed to send. */
+  function hwInput(down, ts) {
+    if (!C.on) return;
     if (down && blocked()) { noteBusy(); return; }
-    const s = cfg.swap ? (side === 'dot' ? 'dash' : 'dot') : side;
-    const man = manualSide(cfg.type);
-    if (s === man) { manualKey(down, ts); return; }
-    if (cfg.type === 'straight') return;
-    if (down) { if (keyer.press(s)) decide(); } else keyer.release(s);
+    manualKey(down, ts);
   }
 
   function releaseAll() {
-    clearTimeout(C.timer);
-    C.timer = null;
-    keyer.releaseAll();
     if (C.manual !== null) manualKey(false, performance.now());
-    for (const b of document.querySelectorAll('.cw-paddles .key-paddle')) b.classList.remove('down');
-    C.held = { dot: false, dash: false };
-    C.sent = { dot: false, dash: false };
-    C.keys.clear();
+    C.input.releaseAll();
   }
 
   // ---------- receiving ----------
@@ -278,7 +251,7 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
     C.rxEls = new Map();
     C.batchMs = BATCH_MS;
     cfg = loadKeyConfig();
-    keyer = new Keyer(cfg);
+    C.input = new KeyInput(cfg);
     renderControls();
     startBand();
   }
@@ -299,7 +272,17 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
   }
 
   // ---------- transcripts (0.13.3) ----------
-  const decode = (tones) => (tones.length ? decodeTones(tones, keyer.wpm, MORSE).text.trim() : '');
+  // 0.15.3: both stations key with a HW keyer → machine timing for both. The elements of the other station are its
+  // own key times (ms from the start of its over, rounded to 1 ms – cwlink.js TxOver), not the playout times here,
+  // so the reserve of the network does not change the gaps (tests/test_decoder_hw.py checks the rounding).
+  const decode = (tones, own = false) => {
+    if (!tones.length) return '';
+    // 0.16.3: own keying with the threshold this device learned from the hand (the other station: its own rhythm)
+    if (own && C.wordHint === undefined) C.wordHint = loadWordHint();
+    const dec = decodeTones(tones, HW_WPM, MORSE, { machine: true, dot: own ? C.dot : null, word: own ? C.wordHint : undefined });
+    if (own) { C.dot = dec.dot; saveWordHint(dec); }
+    return dec.text.trim();
+  };
 
   function pushLine(dir, text) {
     if (!text) return;
@@ -308,7 +291,7 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
   }
 
   function closeTxLine() {
-    pushLine('tx', decode(C.txTones));
+    pushLine('tx', decode(C.txTones, true));
     C.txTones = [];
     renderLog();
   }
@@ -330,7 +313,7 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
     if (!ul || !C.on) return;
     ul.textContent = '';
     const lines = C.lines.filter((l) => (l.dir === 'tx' ? prefs.showTx : prefs.showRx));
-    if (prefs.showTx && C.tx && C.txTones.length) lines.push({ dir: 'tx', text: `${decode(C.txTones)}…`, live: true });
+    if (prefs.showTx && C.tx && C.txTones.length) lines.push({ dir: 'tx', text: `${decode(C.txTones, true)}…`, live: true });
     for (const l of lines.slice(-12)) {
       const li = document.createElement('li');
       li.className = `cw-line ${l.dir}${l.live ? ' live' : ''}`;
@@ -351,44 +334,24 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
     el.className = `cw-trx ${st}`;
     el.textContent = t(`cw.trx.${st}`);
     $('#cw-busy').hidden = now > C.busyNote;
-    for (const b of document.querySelectorAll('.cw-paddles .key-paddle')) b.classList.toggle('locked', st === 'rx');
+    $('#cw-nokey').hidden = hwState.seen;
     const d = C.rx.avgDelay();
     $('#cw-delay').textContent = d === null ? '' : t('cw.delay', { s: fmtNum(d / 1000, 1) });
   }
 
   function renderControls() {
-    const type = $('#cw-key-type');
-    if (!type.options.length) {
-      for (const k of KEY_UI_TYPES) type.add(new Option(t(`key.type.${k}`), k));
+    if (!$('#cw-noise').options.length) {
       for (const k of Object.keys(NOISE_LEVELS)) $('#cw-noise').add(new Option(t(`cw.noise.${k}`), k));
       for (const k of CW_PRESETS) $('#cw-preset').add(new Option(k === 'clean' ? t('cw.presetNone') : t(`band.preset.${k}`), k));
     }
-    type.value = KEY_UI_TYPES.includes(cfg.type) ? cfg.type : KEY_UI_TYPES[0];
-    $('#cw-key-wpm').min = KEYER_WPM_MIN;
-    $('#cw-key-wpm').max = KEYER_WPM_MAX;
-    $('#cw-key-wpm').value = cfg.wpm;
     $('#cw-noise').value = prefs.noise;
     $('#cw-preset').value = prefs.preset;
     $('#cw-show-tx').checked = prefs.showTx;
     $('#cw-show-rx').checked = prefs.showRx;
     renderLog();
-    $('#cw-dash').hidden = cfg.type === 'straight';   // the straight key has one contact
     renderTrx();
   }
 
-  function applyKey() {
-    releaseAll();
-    saveKeyConfig(cfg);
-    keyer = new Keyer(cfg);
-    $('#cw-dash').hidden = cfg.type === 'straight';
-  }
-  $('#cw-key-type').addEventListener('change', (e) => { cfg.type = e.target.value; applyKey(); });
-  $('#cw-key-wpm').addEventListener('change', (e) => {
-    const v = Math.round(Number(e.target.value));
-    cfg.wpm = Math.min(KEYER_WPM_MAX, Math.max(KEYER_WPM_MIN, Number.isFinite(v) ? v : cfg.wpm));
-    e.target.value = cfg.wpm;
-    applyKey();
-  });
   for (const id of ['#cw-noise', '#cw-preset']) {
     $(id).addEventListener('change', () => {
       prefs.noise = $('#cw-noise').value;
@@ -407,32 +370,6 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
     });
   }
 
-  // on-screen paddles (Pointer Events, multitouch for squeezing) – as on the key page
-  for (const [id, side] of [['#cw-dot', 'dot'], ['#cw-dash', 'dash']]) {
-    const b = $(id);
-    const up = (e) => {
-      if (!C.held[side]) return;
-      C.held[side] = false;
-      b.classList.remove('down');
-      if (C.sent[side]) { C.sent[side] = false; input(side, false, e.timeStamp); }
-    };
-    b.addEventListener('pointerdown', async (e) => {
-      e.preventDefault();
-      try { b.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
-      if (C.held[side]) return;
-      C.held[side] = true;
-      b.classList.add('down');
-      const ts = e.timeStamp;
-      if (!player.ready) { await ensureAudio(); if (C.on && !C.band.keyGain) startBand(); }
-      if (!C.held[side] || C.sent[side]) return;
-      C.sent[side] = true;
-      input(side, true, ts);
-    });
-    b.addEventListener('pointerup', up);
-    b.addEventListener('pointercancel', up);
-    b.addEventListener('lostpointercapture', up);
-    b.addEventListener('contextmenu', (e) => e.preventDefault());
-  }
   window.addEventListener('blur', () => { if (C.on) releaseAll(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden && C.on) releaseAll(); });
 
@@ -446,29 +383,15 @@ export function initCwChannel({ player, ensureAudio, pollSoon }) {
     /** keydown / keyup in the room; true = handled (the caller prevents the default – Ctrl shortcuts). */
     onKey(e, down) {
       if (!C.on) return false;
-      const side = e.code === cfg.dot ? 'dot' : (e.code === cfg.dash ? 'dash' : null);
-      if (!side) return false;
-      // own autorepeat filter (validation #33, see keyerui.js)
-      if (down) {
-        if (C.keys.has(e.code)) return true;
-        C.keys.add(e.code);
-      } else {
-        if (!C.keys.has(e.code)) return true;
-        C.keys.delete(e.code);
-        if (!e.ctrlKey) {
-          for (const code of [...C.keys]) {
-            if (code.startsWith('Control')) {
-              C.keys.delete(code);
-              input(code === cfg.dot ? 'dot' : 'dash', false, e.timeStamp);
-            }
-          }
-        }
+      // 0.14.2: the shared keyboard input of the key page (keyinput.js)
+      const acts = C.input.key(e.code, down);
+      if (acts === null) return false;
+      if (down && !player.ready) ensureAudio().then(() => { if (C.on && !C.band.keyGain) startBand(); });
+      for (const a of acts) {
+        if (a.kind !== 'stream') continue;   // the paddle states of mode C are not sent (the stream is the keying)
+        if (a.down && !hwState.seen) { hwState.seen = true; renderTrx(); }
+        hwInput(a.down, e.timeStamp);
       }
-      if (down && !player.ready) {
-        ensureAudio().then(() => { if (C.on && !C.band.keyGain) startBand(); });
-        return true;
-      }
-      input(side, down, e.timeStamp);
       return true;
     },
   };

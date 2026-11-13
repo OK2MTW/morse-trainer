@@ -99,6 +99,7 @@
         <p class="hero-sign">73 Martin OK2MTW</p>
         <p class="hero-licence" data-i18n-html="login.heroLicence">Amateur project under the EUPL-1.2 licence –
           <a href="https://github.com/OK2MTW/morse-trainer" target="_blank" rel="noopener">source code on GitHub</a></p>
+        <p class="hero-licence hero-visits visits-public" hidden></p>
       </section>
       <form class="card form" id="form-login">
         <h2 data-i18n="login.title">Log in</h2>
@@ -200,6 +201,7 @@
         <p id="history-empty" class="hint" data-i18n="home.historyEmpty">No lesson yet.</p>
         <table class="history"><tbody id="history"></tbody></table>
       </div>
+      <p class="hint center visits-public" hidden></p>
     </section>
 
     <!-- ===== COPY BEHIND – own view from the top bar (0.10.10) ===== -->
@@ -513,6 +515,12 @@
           <p class="hint" id="users-count"></p>
           <table class="list"><tbody id="users-list"></tbody></table>
         </div>
+        <div class="card" id="visits-card" hidden>
+          <h2 data-i18n="visits.title">Visits</h2>
+          <p class="hint" data-i18n="visits.hint">Different visitors per day, in brackets never logged in (someone just found the page). Only a salted hash of the address is stored (the salt is deleted after the month), kept permanently.</p>
+          <table class="list"><tbody id="visits-list"></tbody></table>
+          <p class="hint" id="visits-total"></p>
+        </div>
         <div class="card form coach-only" hidden>
           <h2 data-i18n="users.cwTitle">CW room</h2>
           <label class="check"><input type="checkbox" id="cw-kids"> <span><span data-i18n="users.cwKids">Room for children</span>
@@ -570,21 +578,16 @@
               <p class="cw-state"><span id="cw-trx" class="cw-trx free" aria-live="polite"></span>
                 <span id="cw-busy" class="warn" hidden data-i18n="cw.channelBusy">Channel busy</span>
                 <small id="cw-delay" class="hint"></small></p>
-              <div class="key-paddles cw-paddles">
-                <button type="button" id="cw-dot" class="key-paddle" data-i18n="key.dot">· dot</button>
-                <button type="button" id="cw-dash" class="key-paddle" data-i18n="key.dash">– dash</button>
-              </div>
+              <p id="cw-nokey" class="hint warn" data-i18n="cw.noKey">Connect the HW key CwKey (USB) to send – without it you only listen. More on the Key page.</p>
               <ul id="cw-log" class="cw-log" hidden aria-live="polite"></ul>
               <div class="cw-toggles">
                 <label class="check"><input type="checkbox" id="cw-show-tx"> <span data-i18n="cw.showTx">Transcript of my sending</span></label>
                 <label class="check"><input type="checkbox" id="cw-show-rx"> <span data-i18n="cw.showRx">Transcript of what I received (after each over)</span></label>
               </div>
-              <p class="hint" data-i18n="cw.keyHint">Keyboard: left Ctrl = dot, right Ctrl = dash (keys as on the key page). Your over ends after a short silence; then the other station may answer.</p>
+              <p class="hint" id="cw-key-hint-hw" data-i18n="cw.keyHintHw">HW keyer: key with the paddles of your key (the key plays the sidetone). Keys only reach the window with the focus. Your over ends after a short silence.</p>
               <details class="cw-settings">
-                <summary data-i18n="cw.settings">Key and band sound</summary>
+                <summary data-i18n="cw.settings">Band sound</summary>
                 <div class="form">
-                  <label><span data-i18n="key.type">Key type</span> <select id="cw-key-type"></select></label>
-                  <label><span data-i18n="key.wpm">Keyer speed</span> <input id="cw-key-wpm" type="number" step="1" inputmode="numeric"></label>
                   <label><span data-i18n="cw.noiseLabel">Noise</span> <select id="cw-noise"></select></label>
                   <label><span data-i18n="cw.presetLabel">Interference</span> <select id="cw-preset"></select></label>
                   <p class="hint" data-i18n="cw.bandHint">Only you hear your choice; the other station chooses their own. A weak noise always stays.</p>
@@ -592,6 +595,31 @@
               </details>
             </div>
             <div class="buttons"><button type="button" id="cw-hangup" class="danger" data-i18n="cw.hangup">End connection</button></div>
+          </div>
+          <div id="cw-vo" class="cw-link cw-vo" hidden>
+            <p class="cw-link-head"><strong data-i18n="vo.title">Virtual operator</strong> <span id="cw-vo-call" class="hint"></span></p>
+            <div id="cw-vo-setup" class="form">
+              <p class="hint" data-i18n="vo.hint">A practice QSO with a virtual radio amateur. It runs only in your browser: nobody else hears it and nothing is stored. You key with the HW key; the operator answers on the band.</p>
+              <label><span data-i18n="vo.mode">Kind of QSO</span> <select id="cw-vo-mode"></select></label>
+              <p class="hint" id="cw-vo-mode-hint"></p>
+              <label><span data-i18n="vo.myCall">My call sign</span> <input type="text" id="cw-vo-mycall" maxlength="12" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
+              <label><span data-i18n="vo.wpm">Speed of the operator</span> <select id="cw-vo-wpm"></select></label>
+              <label><span data-i18n="vo.fw">Longer gaps (Farnsworth)</span> <select id="cw-vo-fw"></select></label>
+              <label><span data-i18n="vo.show">Text of the operator</span> <select id="cw-vo-show"></select></label>
+              <label><span data-i18n="cw.presetLabel">Interference</span> <select id="cw-vo-preset"></select></label>
+              <div class="buttons"><button type="button" id="cw-vo-start" data-i18n="vo.start">Start the QSO</button>
+                <button type="button" id="cw-vo-close" data-i18n="vo.close">Back to the room</button></div>
+            </div>
+            <div id="cw-vo-run" hidden>
+              <p class="cw-state"><span id="cw-vo-trx" class="cw-trx free" aria-live="polite"></span> <small id="cw-vo-wpm-now" class="hint"></small></p>
+              <p id="cw-vo-nokey" class="hint warn" data-i18n="cw.noKey">Connect the HW key CwKey (USB) to send – without it you only listen. More on the Key page.</p>
+              <ul id="cw-vo-log" class="cw-log" hidden aria-live="polite"></ul>
+              <p class="hint" id="cw-vo-heard" aria-live="polite"></p>
+              <p class="hint" data-i18n="vo.runHint">Call CQ (CQ CQ DE your call K) or call the operator by its call sign. End every over with K – the operator answers after a short pause. AGN or ? = again, QRS / QRQ = slower / faster. Fix a mistake with 7 dots. Keying while it sends stops it after the word.</p>
+              <div class="buttons"><button type="button" id="cw-vo-cq" data-i18n="vo.cq">Let the operator call CQ</button>
+                <button type="button" id="cw-vo-new" data-i18n="vo.new">New QSO</button>
+                <button type="button" id="cw-vo-end" class="danger" data-i18n="vo.end">End</button></div>
+            </div>
           </div>
           <ul id="cw-users" class="cw-users" aria-live="polite"></ul>
           <details id="cw-blocked-box" class="cw-blocked" hidden><summary id="cw-blocked-sum"></summary><ul id="cw-blocked"></ul></details>
@@ -642,33 +670,15 @@
         <p class="hint" data-i18n="band.settingsHint">Development: noise, fading, interference and real keying – for coaches only.</p>
         <button type="button" data-go="band" data-i18n="band.open">🎧 Open band sound</button>
       </div>
-      <div class="card coach-only" hidden>
+      <div class="card keylab-only" hidden>
         <h2 data-i18n="key.title">Telegraph key (experimental)</h2>
-        <div class="send-ex">
-          <div id="send-ex-ctl">
-            <label class="band-slider"><span data-i18n="send.ex.kindLabel">Sending exercise</span> <select id="send-ex-kind"></select></label>
-            <p class="hint" id="send-ex-intro"></p>
-            <button type="button" id="send-ex-start" data-i18n="send.ex.start">Start the exercise</button>
-          </div>
-          <div id="send-ex-run" hidden>
-            <p class="hint" id="send-ex-progress"></p>
-            <p class="send-ex-target" id="send-ex-target" aria-live="polite"></p>
-            <div id="send-ex-result" hidden></div>
-            <p class="hint" id="send-ex-hint"></p>
-            <div class="buttons">
-              <button type="button" id="send-ex-done" data-i18n="send.ex.done">Done (Enter)</button>
-              <button type="button" id="send-ex-next" data-i18n="send.ex.next" hidden>Next (Enter)</button>
-              <button type="button" id="send-ex-again" data-i18n="send.ex.again" hidden>Another series</button>
-              <button type="button" id="send-ex-stop" data-i18n="send.ex.stop">End the exercise</button>
-            </div>
-          </div>
-        </div>
-        <p class="hint" data-i18n="key.settingsHint">Sending: keyer with sidetone – keyboard or USB key converter and two on-screen paddles.</p>
+        <p class="hint" data-i18n="key.settingsHint">Sending with the HW key CwKey (USB). Without the HW key you cannot send.</p>
         <button type="button" data-go="key" data-i18n="key.open">🔑 Open the key</button>
       </div>
       <div class="card">
         <h2 data-i18n="settings.diag">Diagnostics</h2>
         <button type="button" id="install" hidden data-i18n="settings.install">⬇ Install as an app</button>
+        <p class="hint" id="install-hint" hidden data-i18n="settings.installHint">The browser does not offer installation? In Chrome: menu ⋮ → Add to home screen (or Install app). On a phone with parental controls (Family Link) installing may be blocked – the app works in the browser too, just bookmark it.</p>
         <table class="diag"><tbody id="diag"></tbody></table>
         <p class="hint"><a id="other-site" href="/" rel="noopener"></a><br><span data-i18n="settings.sitesHint">The home and outside versions are two separate
           apps (each with its own login); lessons are synchronized through the account.</span></p>
@@ -704,6 +714,18 @@
     <section id="view-key" class="view" hidden>
       <div class="card">
         <h2 data-i18n="key.title">Telegraph key (experimental)</h2>
+        <div id="key-nokey" class="key-hw-detect">
+          <p><strong data-i18n="key.noKey">Connect the HW key CwKey (USB) and press a paddle.</strong></p>
+          <p class="hint" data-i18n="key.noKeyHint">Sending needs the HW key: it forms the dots and dashes itself, the app reads them and decodes. Without the key you can still listen and train receiving. A new key or a key that does not respond: see the CwKey firmware card below and the key manual.</p>
+          <p class="hint"><a href="https://github.com/OK2MTW/morse-key-hw" target="_blank" rel="noopener" data-i18n="key.noKeyLink">Key manual (GitHub)</a></p>
+        </div>
+        <div id="fw-offer" class="key-hw-detect" hidden>
+          <p id="fw-offer-text"></p>
+          <div class="buttons">
+            <button type="button" id="fw-offer-yes" data-i18n="fw.offerYes">Update</button>
+            <button type="button" id="fw-offer-no" data-i18n="fw.offerNo">Not now</button>
+          </div>
+        </div>
         <div class="send-ex">
           <div id="send-ex-ctl">
             <label class="band-slider"><span data-i18n="send.ex.kindLabel">Sending exercise</span> <select id="send-ex-kind"></select></label>
@@ -714,10 +736,6 @@
             <p class="hint" id="send-ex-progress"></p>
             <p class="send-ex-target" id="send-ex-target" aria-live="polite"></p>
           </div>
-        </div>
-        <div class="key-paddles">
-          <button type="button" id="key-dot" class="key-paddle" data-i18n="key.dot">· dot</button>
-          <button type="button" id="key-dash" class="key-paddle" data-i18n="key.dash">– dash</button>
         </div>
         <div id="send-ex-tail" hidden>
           <p class="hint" id="send-ex-hint"></p>
@@ -732,11 +750,18 @@
         <p class="key-text" id="key-text" aria-live="polite">–</p>
         <p class="hint key-codes" id="key-codes"></p>
         <div id="key-free">
-          <p class="hint" data-i18n="key.paddlesHint">Hold a paddle; two fingers at once = squeeze. The sound starts with the first touch.</p>
           <p class="hint" id="key-est"></p>
           <div id="key-eval" class="send-eval" hidden></div>
-          <p class="hint" data-i18n="key.outHint">The decoder learns your rhythm from the neighbouring elements (dot and dash lengths and the gaps inside characters, between characters and words) – you do not have to keep the set tempo.</p>
+          <p class="hint" data-i18n="key.outHint">The decoder learns your rhythm from the neighbouring elements (dot and dash lengths and the gaps inside characters, between characters and words) – you do not have to keep the set tempo. Fix a mistake with 7 or more dots – it erases the word in progress, or the word just finished.</p>
           <button type="button" id="key-clear" data-i18n="key.clear">Clear the transcript</button>
+          <details id="key-diag-box">
+            <summary data-i18n="key.diag.title">How the decoder reads</summary>
+            <p class="hint" data-i18n="key.diag.hint">The last words gap by gap, in dots of your key. Inside a character the key keeps 1 dot; between letters you should leave about 3, between words about 7. Gaps marked with ⚠ are close to a threshold.</p>
+            <p class="hint" id="key-diag-head"></p>
+            <ol id="key-diag" class="key-diag"></ol>
+            <button type="button" id="key-diag-copy" data-i18n="key.diag.copy">Copy</button>
+            <p class="hint" id="key-diag-status" aria-live="polite"></p>
+          </details>
           <div id="key-rec" hidden>
             <p class="hint" data-i18n="key.rec.hint">Recording for tuning the decoder: write what you sent, then send it.</p>
             <input type="text" id="key-rec-text" maxlength="200" autocomplete="off" data-i18n-attr="placeholder:key.rec.placeholder">
@@ -746,20 +771,58 @@
         </div>
       </div>
       <div class="card">
-        <label class="band-slider"><span data-i18n="key.type">Key type</span> <select id="key-type"></select></label>
-        <p class="hint" id="key-type-hint"></p>
-        <div class="stepper key-wpm">
-          <span class="st-label" data-i18n="key.wpm">Keyer speed</span>
-          <button type="button" id="key-wpm-minus" class="st-btn" data-i18n-attr="aria-label:settings.decrease">−</button>
-          <output id="key-wpm-val"></output>
-          <button type="button" id="key-wpm-plus" class="st-btn" data-i18n-attr="aria-label:settings.increase">+</button>
-        </div>
-        <label class="check"><input type="checkbox" id="key-swap"> <span data-i18n="key.swap">Swap paddles (left-handed)</span></label>
-        <label class="check"><input type="checkbox" id="key-sidetone"> <span data-i18n="key.sidetone">Sidetone</span> <small data-i18n="key.sidetoneHint">(off when the converter has its own buzzer)</small></label>
+        <h2 data-i18n="key.hwTitle">HW key CwKey (USB)</h2>
+        <p class="hint" data-i18n="key.typeHint.hw">A key with its own keyer and buzzer (a USB keyboard): the key forms the dots and dashes, the app reads only the stream key (default F13), decodes and evaluates. Speed and swapping the paddles are set on the key.</p>
+        <label class="check"><input type="checkbox" id="key-sidetone"> <span data-i18n="key.sidetone">Sidetone</span> <small data-i18n="key.sidetoneHint">(the key has its own buzzer)</small></label>
         <p class="hint" id="key-map"></p>
         <div class="buttons">
           <button type="button" id="key-learn" data-i18n="key.learn">Learn keys</button>
-          <button type="button" id="key-map-reset" data-i18n="key.mapReset">Default (Left/Right Ctrl)</button>
+          <button type="button" id="key-map-reset" data-i18n="key.mapResetHw">Default (F13)</button>
+        </div>
+        <div id="key-learn-box" class="key-learn" hidden>
+          <p id="key-learn-msg" aria-live="polite"></p>
+          <div class="buttons">
+            <button type="button" id="key-learn-ok" data-i18n="key.learnOk">Confirm (Enter)</button>
+            <button type="button" id="key-learn-again" data-i18n="key.learnAgain">Again</button>
+            <button type="button" id="key-learn-cancel" data-i18n="key.learnCancel">Cancel (Esc)</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" id="fw-card" hidden>
+        <h2 data-i18n="fw.title">CwKey firmware</h2>
+        <p id="fw-avail"></p>
+        <p class="hint" id="fw-installed"></p>
+        <label class="fw-midi-row"><input type="checkbox" id="fw-midi-on"> <span data-i18n="fw.midiOn">Read the version from the key over USB MIDI (FW 0.4.0 and newer, on trial)</span></label>
+        <p class="hint" id="fw-midi-msg" aria-live="polite"></p>
+        <details id="fw-notes-box" hidden>
+          <summary data-i18n="fw.notes">What is new</summary>
+          <pre id="fw-notes" class="fw-notes"></pre>
+        </details>
+        <button type="button" id="fw-start" hidden></button>
+        <div id="fw-wizard" class="fw-wizard" hidden>
+          <label id="fw-ver-row" hidden><span data-i18n="fw.version">Version</span> <select id="fw-ver"></select></label>
+          <ol>
+            <li>
+              <span data-i18n="fw.step1">Connect the key with a USB cable and press NRST on the module twice quickly (within half a second). A drive STMF411BOOT (F411) or BlackPill (F401) appears and the LED glows.</span>
+              <span id="fw-boot" hidden>
+                <span data-i18n="fw.bootHint">Or let the app switch the key to the bootloader over MIDI (do not key meanwhile):</span>
+                <button type="button" id="fw-boot-btn" data-i18n="fw.bootBtn">Switch the key to the bootloader</button>
+              </span>
+            </li>
+            <li id="fw-pick">
+              <span data-i18n="fw.step2pick">Select that drive (its top folder) and allow editing. The app recognises the chip, checks the file and writes it.</span>
+              <button type="button" id="fw-pick-btn" data-i18n="fw.pickBtn">Select the key drive</button>
+            </li>
+            <li id="fw-manual">
+              <span data-i18n="fw.step2manual">This browser cannot write to the drive. Choose the chip (written on the module), download the checked file and copy it to the drive (Android: the Files app, the key on an OTG cable).</span>
+              <label><span data-i18n="fw.chip">Chip</span> <select id="fw-chip"></select></label>
+              <button type="button" id="fw-download" data-i18n="fw.download">Download the file</button>
+              <button type="button" id="fw-copied" data-i18n="fw.copied" hidden>Copied to the drive</button>
+            </li>
+          </ol>
+          <p id="fw-msg" class="hint" aria-live="polite"></p>
+          <p id="fw-done" class="hint" data-i18n="fw.after" hidden>The key restarts by itself (the drive disappears, a warning about removing it is fine). Then one long LED blink and the paddles key again – press one to confirm.</p>
+          <button type="button" id="fw-close" data-i18n="fw.close">Close</button>
         </div>
       </div>
       <div class="card">
@@ -767,6 +830,10 @@
           <summary data-i18n="key.log">Events (converter acceptance test)</summary>
           <p class="hint" data-i18n="key.logHint">Time from the first event and the gap to the previous one in ms.</p>
           <p class="hint" id="key-log-count"></p>
+          <pre id="key-log-sum" class="key-log-sum"></pre>
+          <button type="button" id="key-log-copy" data-i18n="key.logCopy">Copy the log</button>
+          <p class="hint" id="key-log-copy-status" aria-live="polite"></p>
+          <textarea id="key-log-text" class="key-log-text" rows="6" readonly hidden></textarea>
           <table class="diag key-log"><tbody id="key-log"></tbody></table>
         </details>
         <button type="button" data-go="settings" data-i18n="nav.settings">Settings</button>

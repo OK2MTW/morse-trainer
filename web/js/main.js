@@ -35,9 +35,12 @@ import { renderUsers } from './usersui.js';
 import { initCwRoom } from './cwroomui.js';
 import { initCwBell } from './cwbell.js';
 import { initCwChannel } from './cwchannel.js';
+import { initVoUi } from './voui.js';
 import { SEND_MIN_CHARS } from './sendeval.js';
 import { initDemoBand } from './demoband.js';
 import { initVocab } from './vocabui.js';
+import { showVisitCount } from './visitcount.js';
+import { initFwUi } from './fwui.js';
 import * as WPM from '../vendor/morse-pro/morse-pro-wpm.js';
 
 const $ = (s) => document.querySelector(s);
@@ -118,12 +121,14 @@ function show(name) {
   for (const el of document.querySelectorAll('.coach-only')) el.hidden = !coach;
   for (const el of document.querySelectorAll('.staff-only')) el.hidden = !staff;
   for (const el of document.querySelectorAll('.member-only')) el.hidden = out;
-  if ((name === 'band' || name === 'key') && !coach) name = 'settings'; // VK (0.11.0): experimental, coaches
+  const keyLab = coach || !!session.user?.key_lab; // 0.14.4: the trainer can open the key page to a student
+  for (const el of document.querySelectorAll('.keylab-only')) el.hidden = !keyLab;
+  if ((name === 'band' && !coach) || (name === 'key' && !keyLab)) name = 'settings'; // VK (0.11.0): experimental
   $('.usermenu').hidden = out;
   if (view === 'demo' && name !== 'demo') { demo.stop(); demoBand.stop(); }
   if (view === 'band' && name !== 'band') bandLab.stop();
   if (view === 'key' && name !== 'key') keyUi.stop();
-  if (view === 'cw' && name !== 'cw') cwRoom.stop();
+  if (view === 'cw' && name !== 'cw') { cwRoom.stop(); voUi.stop(); }
   if (session.user && !session.user.pw_change && name !== 'cw') cwBell.start(); else cwBell.stop(); // 0.13.6
   if (view === 'vocab' && name !== 'vocab') vocab.stop();
   view = name;
@@ -139,6 +144,7 @@ function show(name) {
   $('#user-btn').classList.toggle('active', ['settings', 'account', 'stats', 'users'].includes(name));
   closeUserMenu();
   if (name === 'home') renderHome();
+  if (name === 'login' || name === 'home') showVisitCount(); // 0.14.6: public visit counter
   if (name === 'settings') { renderSteppers(); refreshDiag(); }
   if (name === 'account') renderAccount();
   if (name === 'users') renderUsers(session.user, session.offline);
@@ -146,7 +152,7 @@ function show(name) {
   if (name === 'quiz') openQuiz();
   if (name === 'demo') { demo.render(); demoBand.render(); }
   if (name === 'band') bandLab.render();
-  if (name === 'key') keyUi.render();
+  if (name === 'key') { keyUi.render(); fwUi.show(); }
   if (name === 'cw') cwRoom.render();
   if (name === 'vocab') vocab.render();
   if (name === 'copyhome') renderCopyCard();
@@ -187,18 +193,22 @@ const demo = initDemo({
 });
 const bandLab = initBandLab({ player, ensureAudio }); // ZB listening lab (development, coaches)
 // VK (0.11.0): telegraph key (experimental, coaches); 0.12.0 sending exercise from the receive level (≥ 10 characters)
-const keyUi = initKeyerUi({ player, ensureAudio, getChars: () => charsForLevel(Math.max(SEND_MIN_CHARS, lvl())) });
+const fwUi = initFwUi(); // 0.15.0: HW key firmware on the key page
+const keyUi = initKeyerUi({ player, ensureAudio, getChars: () => charsForLevel(Math.max(SEND_MIN_CHARS, lvl())),
+  onHwSeen: () => fwUi.hwSeen() });
 const cwLink = {}; // 0.13.2: the channel (keying, playback) – filled below, the room calls it on every poll
 const cwRoom = initCwRoom({ player, ensureAudio, onAuth: () => sessionExpired(), link: cwLink }); // 0.13.1
 // 0.13.6: who knocks while I am elsewhere in the app – no sound in a lesson or on a sound page
 const cwBell = initCwBell({ player, quiet: () => !UPDATE_SAFE_VIEWS.includes(view) || ['login', 'demo'].includes(view) });
 Object.assign(cwLink, initCwChannel({ player, ensureAudio, pollSoon: (ms) => cwRoom.pollSoon(ms) }));
+// 0.16.0: the virtual operator in the CW room (all in the browser)
+const voUi = initVoUi({ player, ensureAudio, getNick: () => session.user?.nick || '', isLinked: () => !!cwRoom.data?.link });
 const demoBand = initDemoBand({ player, ensureAudio }); // 0.9.9: band sample in the demo
 const vocab = initVocab({ sync, show: (n) => show(n), player, ensureAudio }); // 0.10.0: abbreviations, Q codes, prefixes
 
 document.addEventListener('keydown', (e) => {
   if (view === 'key') { if (keyUi.onKey(e, true)) e.preventDefault(); return; }
-  if (view === 'cw') { if (cwLink.onKey(e, true)) e.preventDefault(); return; }
+  if (view === 'cw') { if (voUi.onKey(e, true) || cwLink.onKey(e, true)) e.preventDefault(); return; }
   if (view === 'copy') { if (copyCtl.onKey(e)) e.preventDefault(); return; }
   if (view === 'head') { if (headCtl.onKey(e)) e.preventDefault(); return; }
   if (view === 'vocab') { if (vocab.onKey(e)) e.preventDefault(); return; }
@@ -212,7 +222,7 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('keyup', (e) => {
   if (view === 'key' && keyUi.onKey(e, false)) e.preventDefault(); // VK: paddle released
-  if (view === 'cw' && cwLink.onKey(e, false)) e.preventDefault(); // 0.13.2: CW room key released
+  if (view === 'cw' && (voUi.onKey(e, false) || cwLink.onKey(e, false))) e.preventDefault(); // 0.13.2: CW room key released
 });
 
 // ================= HOME =================
@@ -1067,7 +1077,9 @@ $('#play-paris').addEventListener('click', async () => { if (await ensureAudio()
 
 // ================= diagnostics and installation =================
 let installEvt = null;
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('#install').hidden = false; });
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault(); installEvt = e; $('#install').hidden = false; $('#install-hint').hidden = true;
+});
 window.addEventListener('appinstalled', () => { $('#install').hidden = true; });
 $('#install').addEventListener('click', () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('#install').hidden = true; } });
 
@@ -1076,6 +1088,7 @@ async function refreshDiag() {
   let ver = '?';
   try { ver = (await (await fetch('/api/health')).json()).version; } catch (e) { ver = t('diag.serverDown'); }
   const standalone = matchMedia('(display-mode: standalone)').matches;
+  $('#install-hint').hidden = standalone || !!installEvt; // 0.14.4: no install offer (e.g. Family Link) → how to
   const yes = t('diag.yes');
   const rows = [
     [t('diag.version'), ver],

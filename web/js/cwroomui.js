@@ -129,10 +129,14 @@ export function initCwRoom({ player, ensureAudio, onAuth, link = null }) {
     if (sig === st.usersSig && ul.childElementCount) return;
     st.usersSig = sig;
     ul.textContent = '';
-    // the virtual operator: a fixed entry at the top, not active yet
+    // the virtual operator (0.16.0): a fixed entry at the top – a practice QSO any time (voui.js)
     const vo = document.createElement('li');
-    vo.className = 'cw-user vo';
-    vo.append(dot('vo'), label(t('cw.vo'), t('cw.voSoon')));
+    vo.className = 'cw-user vo can-knock';
+    vo.append(dot('vo'), label(t('cw.vo'), t('cw.voSub')));
+    vo.addEventListener('click', () => {
+      if (d.link) { showNotice(t('vo.linked')); return; }
+      document.dispatchEvent(new CustomEvent('cw-vo-open'));
+    });
     ul.append(vo);
 
     const heard = new Set();

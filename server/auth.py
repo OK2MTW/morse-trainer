@@ -193,7 +193,7 @@ def load_session():
         return
     db = get_db()
     row = db.execute(
-        "SELECT s.*, u.nick, u.role, u.disabled, u.age_group, u.pw_change, u.debug_log, u.news_seen, u.created_at AS u_created FROM sessions s JOIN users u ON u.id = s.user_id "
+        "SELECT s.*, u.nick, u.role, u.disabled, u.age_group, u.pw_change, u.debug_log, u.news_seen, u.key_lab, u.created_at AS u_created FROM sessions s JOIN users u ON u.id = s.user_id "
         "WHERE s.id_hash = ?", (sha256(token),)).fetchone()
     t = now()
     if row is None or row["expires_at"] < iso(t) or row["disabled"]:
@@ -203,7 +203,8 @@ def load_session():
     g.session = row
     g.user = {"id": row["user_id"], "nick": row["nick"], "role": row["role"], "age_group": row["age_group"],
               "pw_change": bool(row["pw_change"]), "debug": bool(row["debug_log"]),
-              "news_seen": row["news_seen"], "created_at": row["u_created"]}
+              "news_seen": row["news_seen"], "created_at": row["u_created"],
+              "key_lab": bool(row["key_lab"]) or row["role"] == ROLE_COACH}
     # sliding validity – written at most once an hour (saves the SD card)
     if row["last_seen"] < iso(t - timedelta(hours=1)):
         db.execute("UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id_hash = ?",

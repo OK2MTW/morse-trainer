@@ -260,5 +260,6 @@
  "cw.err.badBatch": "Invalid keying data.",
  "err.groupNotFound": "The group does not exist.",
  "err.groupName": "Enter the group name.",
- "err.groupExists": "A group with this name already exists."
+ "err.groupExists": "A group with this name already exists.",
+ "err.fwNotFound": "Firmware file not found."
 }

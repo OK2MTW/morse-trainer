@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-IGNORED_OK = (".venv/", "data/*.db", "data/*.db-wal", "data/*.db-shm", "data/*.db-journal", "__pycache__/",
+IGNORED_OK = (".venv/", "data/*.db", "data/*.db-wal", "data/*.db-shm", "data/*.db-journal", "__pycache__/", "data/fw/",
               "*/__pycache__/")
 
 
@@ -26,3 +26,15 @@ class FilesTest(unittest.TestCase):
         bad = [p for p in out if not any(fnmatch.fnmatch(p, pat) for pat in IGNORED_OK)]
         self.assertEqual(bad, [], "unexpected ignored files: " + ", ".join(bad))
         self.assertFalse([p for p in out if p.startswith("web/")], "ignored files under web/ would be served")
+
+
+class HtmlIdsTest(unittest.TestCase):
+    def test_unique_ids_in_pages(self):
+        """0.13.11: the sending exercise block was in index.html twice (settings card + key page) – querySelector took
+        the copy in the settings card. Every id once per page."""
+        import collections
+        import re
+        for page in sorted((ROOT / "web").glob("*.html")):
+            ids = re.findall(r'\sid="([^"]+)"', page.read_text(encoding="utf-8"))
+            dup = [i for i, n in collections.Counter(ids).items() if n > 1]
+            self.assertEqual(dup, [], f"{page.name}: duplicate ids")

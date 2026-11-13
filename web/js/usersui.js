@@ -62,6 +62,28 @@ export async function renderUsers(me, offline) {
   for (const el of document.querySelectorAll('#view-users .coach-only')) el.hidden = !isCoach();
   await reload();
   loadInvites();
+  loadVisits();
+}
+
+// ================= visits (0.14.5, administrator) =================
+async function loadVisits() {
+  $('#visits-card').hidden = !isAdmin();
+  if (!isAdmin()) return;
+  const tb = $('#visits-list');
+  tb.textContent = '';
+  let v;
+  try { v = await api('GET', '/visits?days=14'); } catch (e) { cell(tb.insertRow(), e.message); return; }
+  const pair = (x) => t('visits.pair', { n: x[0], anon: x[1] });
+  const head = tb.insertRow();
+  for (const k of ['visits.day', 'visits.lan', 'visits.public']) cell(head, t(k));
+  if (!v.days.length) cell(tb.insertRow(), t('visits.none'));
+  for (const d of v.days) {
+    const row = tb.insertRow();
+    cell(row, fmtDateL(`${d.day}T12:00:00Z`, { day: 'numeric', month: 'numeric', weekday: 'short' }));
+    cell(row, pair(d.lan));
+    cell(row, pair(d.public));
+  }
+  $('#visits-total').textContent = t('visits.total', { lan: pair(v.total.lan), pub: pair(v.total.public) });
 }
 
 async function reload() {
@@ -132,6 +154,7 @@ function renderUserList() {
     if (isAdmin() && u.coach_nick && u.role === ROLE_STUDENT) facts.push(t('users.coachOf', { nick: u.coach_nick }));
     const cw = cwState(u);
     if (cw) facts.push(cw);
+    if (u.key_lab && u.role === ROLE_STUDENT) facts.push(t('users.keyLabOn'));
     cell(row, u.nick + (u.disabled ? ` ${t('users.blockedMark')}` : ''), facts.join(' · '));
     cell(row, t('users.levelLessons', { level: u.level || 2, n: u.lessons }), t('users.last', { at: fmtDate(u.last_lesson) }));
     const td = cell(row, '');
@@ -176,6 +199,22 @@ function userActions(u) {
     const l = document.createElement('label');
     l.className = 'check';
     const s = document.createElement('span'); s.textContent = t('users.cwAllowed');
+    l.append(cb, s);
+    box.append(l);
+  }
+
+  // 0.14.4: the telegraph key page (experimental, coaches only) opened to this student
+  if (!u.disabled && u.role === ROLE_STUDENT) {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!u.key_lab;
+    cb.addEventListener('change', async () => {
+      try { await api('PUT', `/users/${u.id}/key-lab`, { on: cb.checked }); } catch (e) { alert(e.message); }
+      reload();
+    });
+    const l = document.createElement('label');
+    l.className = 'check';
+    const s = document.createElement('span'); s.textContent = t('users.keyLab');
     l.append(cb, s);
     box.append(l);
   }
