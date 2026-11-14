@@ -429,6 +429,7 @@ GM_W_N = CONSTS['DEC_GM_W_N']
 GM_WIN = int(CONSTS['DEC_GM_WIN'])
 GM_SHRINK = CONSTS['DEC_GM_SHRINK']
 GM_MIN = int(CONSTS['DEC_GM_MIN'])
+GM_PAUSE = CONSTS['DEC_GM_PAUSE']
 
 
 class GapModel:
@@ -543,13 +544,16 @@ def machine_units(tones):
 def model_gaps(units, prior=None):
     """1.1 K2: the gap classes of one over from the gap model → (kinds, conf, model). kinds[i] = 0/1/2 (None first),
     conf[i] = the probability of the chosen class."""
-    human = [x for x in units[1:] if x >= MACH_SPLIT]
+    human = [x for x in units[1:] if MACH_SPLIT <= x < GM_PAUSE]   # 1.1.4: pauses outside the model
     gm = GapModel(prior).fit(human)
     probs = iter(gm.word_probs())
     kinds, conf = [None], [None]
     for x in units[1:]:
         if x < MACH_SPLIT:
             kinds.append(0)
+            conf.append(1.0)
+        elif x >= GM_PAUSE:
+            kinds.append(2)
             conf.append(1.0)
         else:
             p = next(probs)

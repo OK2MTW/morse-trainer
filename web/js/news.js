@@ -23,7 +23,9 @@ export const NEWS = [
   { id: 14, version: '1.0.1', at: '2026-11-13T17:24:00Z', items: ['news.voTol'] },
   { id: 15, version: '1.0.2', at: '2026-11-13T23:11:00Z', items: ['news.sendMenu', 'news.theme'] },
   { id: 16, version: '1.1.0', at: '2026-11-14T02:00:00Z', items: ['news.voHand'] },
-  { id: 17, version: '1.1.2', at: '2026-11-15T04:00:00Z', items: ['news.voLex'] },
+  { id: 17, version: '1.1.2', at: '2026-11-14T02:54:00Z', items: ['news.voLex'] },
+  { id: 18, version: '1.1.3', at: '2026-11-14T03:18:00Z', items: ['news.keyRead'] },
+  { id: 19, version: '1.1.4', at: '2026-11-14T07:00:00Z', items: ['news.keyTempoIn'] },
 ];
 
 const LATEST = Math.max(0, ...NEWS.map((n) => n.id));

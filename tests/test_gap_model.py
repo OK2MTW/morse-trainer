@@ -86,6 +86,18 @@ class GapModelTest(unittest.TestCase):
         kinds, _, _ = classify([4.0, 4.2, 11.0], prior)
         self.assertEqual(kinds, [1, 1, 2])
 
+    def test_pauses_outside_the_model(self):
+        # 1.1.4 (Martin's Sending page): pauses between attempts (seconds) dragged the word class up and real word gaps
+        # of ~8 dots read as gaps between characters (CQCQCQDE) – pauses are word gaps for sure and stay out of the fit
+        xs, truth = gaps(3.4, 8.5, n_words=12)
+        for i in (len(xs) // 3, 2 * len(xs) // 3):
+            xs[i] = 300.0
+            truth[i] = 2
+        kinds, conf, gm = classify(xs)
+        self.assertEqual(kinds, truth)
+        self.assertLess(math.exp(gm.m[1]), D.GM_PAUSE)
+        self.assertEqual(D.GM_PAUSE, 20)
+
     def test_empty(self):
         kinds, conf, gm = D.model_gaps([None])
         self.assertEqual(kinds, [None])
@@ -107,7 +119,7 @@ class TestGapModelJs(unittest.TestCase):
         self.voui = (root / 'web/js/voui.js').read_text(encoding='utf-8')
 
     def test_constants_from_js(self):
-        for name in ('CHAR', 'WORD', 'SD', 'SD_MIN', 'NPRIOR', 'KEEP', 'SEP', 'ITER', 'W_WORD', 'W_N', 'WIN', 'SHRINK', 'MIN'):
+        for name in ('CHAR', 'WORD', 'SD', 'SD_MIN', 'NPRIOR', 'KEEP', 'SEP', 'ITER', 'W_WORD', 'W_N', 'WIN', 'SHRINK', 'MIN', 'PAUSE'):
             self.assertIn(f'DEC_GM_{name}', D.CONSTS)
         self.assertEqual(D.GM_NORM, (3.0, 7.0))
         self.assertEqual(D.GM_ITER, 15)

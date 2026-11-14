@@ -4,7 +4,7 @@
 // a word, the transcript and what the VO heard. Logic: vo.js. Nothing goes to the server; only the settings stay in
 // localStorage. The VO never keys the HW (H-21) – it only sounds here.
 import { t } from './i18n.js';
-import { loadKeyConfig, HW_WPM } from './keyerui.js';
+import { loadKeyConfig, HW_WPM, showRead } from './keyerui.js';
 import { KeyInput, hwState } from './keyinput.js';
 import { LiveBand, bandParams } from './band.js';
 import { decodeTones, loadWordHint, saveWordHint } from './decoder.js';
@@ -401,19 +401,9 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
     if (h.qrq) parts.push('QRQ');
     if (h.bye) parts.push('73 / SK');
     const heard = parts.length ? t('vo.heard', { v: parts.join(' · ') }) : t('vo.heardNothing');
-    if (!h.marks) { el.textContent = h.read ? `${t('vo.read', { v: h.read })} ${heard}` : heard; return; }   // 1.0.1
-    // 1.1 K4: the unsure gaps of the read over – a dotted '_' (read as a space) or '·' (read as one word)
-    const [pre, post] = t('vo.read', { v: '\u0000' }).split('\u0000');
-    el.textContent = pre;
-    for (const [txt, unsure] of h.marks) {
-      if (!unsure) { el.append(txt); continue; }
-      const s = document.createElement('span');
-      s.className = 'vo-unsure';
-      s.textContent = txt === ' ' ? '_' : '·';
-      s.title = t(txt === ' ' ? 'vo.unsureSpace' : 'vo.unsureJoin');
-      el.append(s);
-    }
-    el.append(`${post} ${heard} `);
+    if (!h.read) { el.textContent = heard; return; }
+    showRead(el, `${t('vo.read', { v: '\u0000' })} ${heard} `, h.read, h.marks);   // 1.0.1, 1.1 K4: unsure gaps dotted
+    if (!h.marks) return;
     const lg = document.createElement('span');
     lg.className = 'vo-unsure-legend';
     lg.textContent = t('vo.unsureLegend');

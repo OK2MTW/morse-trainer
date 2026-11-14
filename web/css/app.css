@@ -77,6 +77,7 @@ button.big { display: block; width: 100%; padding: 16px; font-size: 1.1rem; font
 .hint a { color: var(--accent); }
 .vo-unsure { color: var(--accent); text-decoration: underline dotted; padding: 0 1px; cursor: help; }
 .vo-unsure-legend { opacity: .8; font-size: .9em; }
+.key-read { margin: .3em 0; }
 .warn { color: var(--miss); }
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }

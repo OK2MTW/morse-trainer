@@ -334,6 +334,7 @@ export const DEC_GM_W_N = 20;         // … worth 20 gaps
 export const DEC_GM_WIN = 6;          // the tempo of the hand from ±6 neighbouring human gaps …
 export const DEC_GM_SHRINK = 2;       // … shrunk towards the mean tempo (2 gaps' worth)
 export const DEC_GM_MIN = 6;          // the EM starts from a split of the data with at least 6 human gaps
+export const DEC_GM_PAUSE = 20;       // 1.1.4: a gap from 20 dots = a pause (a word gap for sure), outside the model
 
 /** Two-class log-normal mixture of human gaps (in dots). prior = learned() of an earlier over or null (= norm). */
 export class GapModel {
@@ -460,13 +461,16 @@ export function machineUnits(tones) {
  * conf[i] = the probability of the chosen class.
  */
 export function modelGaps(units, prior = null) {
-  const gm = new GapModel(prior).fit(units.slice(1).filter((x) => x >= DEC_MACH_SPLIT));
+  // 1.1.4: pauses (≥ DEC_GM_PAUSE dots – between attempts, thinking) stay out of the model: they would drag the word
+  // class far up and the real word gaps of the hand would then read as gaps between characters (CQCQCQDE)
+  const gm = new GapModel(prior).fit(units.slice(1).filter((x) => x >= DEC_MACH_SPLIT && x < DEC_GM_PAUSE));
   const probs = gm.wordProbs();
   let k = 0;
   const kinds = [null];
   const conf = [null];
   for (const x of units.slice(1)) {
     if (x < DEC_MACH_SPLIT) { kinds.push(0); conf.push(1); continue; }
+    if (x >= DEC_GM_PAUSE) { kinds.push(2); conf.push(1); continue; }
     const p = probs[k++];
     kinds.push(p >= 0.5 ? 2 : 1);
     conf.push(Math.max(p, 1 - p));

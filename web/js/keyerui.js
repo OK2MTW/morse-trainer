@@ -11,6 +11,7 @@ import { KeyInput, HW_TYPE, hwState } from './keyinput.js';
 import { logSummary, KEYLOG_MAX } from './keylog.js';
 import { traceOn, traceBegin, traceEnd, flushTrace } from './trace.js';
 import { KeyAuto } from './keyauto.js';
+import { segment, overUnits, unsureMarks } from './vo.js';
 import {
   sendMetrics, focusOf, evaluateSending, sessionSummary, sendTask, EVAL_WINDOW, SEND_KINDS, SEND_TASKS,
   SEND_END_MS, SEND_END_UNITS, handHabits, qsoReady,
@@ -103,6 +104,50 @@ function writeQueue(q) {
   try { localStorage.setItem(SEND_QUEUE, JSON.stringify(q.slice(-SEND_QUEUE_MAX))); } catch (e) { /* private mode */ }
 }
 
+export const KEY_READ_MS = 800;   // 1.1.3: the operator's reading after this pause of the keying …
+export const KEY_READ_MIN = 2;    // … from 2 tones
+export const KEY_HAND_MIN = 8;    // the gaps of the hand shown from 8 human gaps (at least 2 between words)
+
+/**
+ * 1.1.3: a read text into el – label with \u0000 where the text goes; marks (unsureMarks) show the unsure gaps dotted:
+ * '_' read as a gap between words, '·' read as one word. Shared by the Sending page and the virtual operator.
+ */
+export function showRead(el, label, text, marks) {
+  const [pre, post] = label.split('\u0000');
+  el.textContent = pre;
+  if (!marks) el.append(text);
+  else {
+    for (const [txt, unsure] of marks) {
+      if (!unsure) { el.append(txt); continue; }
+      const s = document.createElement('span');
+      s.className = 'vo-unsure';
+      s.textContent = txt === ' ' ? '_' : '·';
+      s.title = t(txt === ' ' ? 'vo.unsureSpace' : 'vo.unsureJoin');
+      el.append(s);
+    }
+  }
+  el.append(post ?? '');
+}
+
+/**
+ * 1.1.4 (Martin 2026-11-14): the key starts a module at the app's tempo – on opening the Sending page (its sending
+ * tempo) and the CW Chat (the receiving tempo) the HW key gets it over USB MIDI. Only with the MIDI switch on and a key
+ * that answers; silent otherwise. Returns the tempo set (or already there), null when not possible.
+ */
+export async function keyTempoTo(w) {
+  if (!Number.isInteger(w) || !midiSwitchOn() || !HwMidi.supported()) return null;
+  try {
+    const m = sharedMidi();
+    if (!(m.connected() || await m.open())) return null;
+    if (!m.info) await m.getInfo();
+    let cur = null;
+    try { cur = await m.get(KEY_WPM_ID); } catch (e) { cur = null; }   // GET not answered → just set
+    if (cur === w) return w;
+    const d = await m.set(KEY_WPM_ID, w);
+    return d.type === 'ack' ? w : null;
+  } catch (e) { return null; }
+}
+
 export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => HW_WPM, onHwSeen = () => {}, sync = null }) {
   const cfg = load();
   const S = {
@@ -113,6 +158,9 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     paddles: [],       // 0.14.0: paddle states of a HW key in mode C {side, down, at} (debug record)
     hwDot: null,       // 0.14.0: the last measured dot of the HW stream (ms) – the hint of the decoder
     lastDec: null,     // 0.15.4: the last decoding of the transcript (diagnostics)
+    gm: null,          // 1.1.3: the gap model of the hand learned before the last clear (prior of the next transcript)
+    lastGm: null,      // 1.1.3: the gap model of the current transcript
+    readTimer: null,   // 1.1.3: the operator's reading runs after a pause of the keying
   };
   const sidetoneOn = () => cfg.hwSidetone;
   // 1.0.2: automatic recording of the keying (debug accounts) – a pure decoding, nothing learned from it
@@ -436,6 +484,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     if ($('#key-diag-box').open) renderDiag();
     $('#key-text').textContent = r.text || '–';
     $('#key-codes').textContent = r.codes.slice(-12).join(' ');
+    scheduleRead();
     $('#key-est').textContent = tones.length >= EST_MIN_TONES ? t('key.estimateHw', { wpm: Math.round(r.wpm) }) : '';
     // D3 (0.11.4): form of free sending over the last EVAL_WINDOW tones
     const box = $('#key-eval');
@@ -449,6 +498,35 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     h.className = 'hint';
     h.textContent = t('send.free', { n: win.length });
     box.prepend(h);
+  }
+
+  // 1.1.3: how an operator would read the transcript – the gap model of the hand (1.1.0) and the lexicon (1.1.1), as
+  // the virtual operator, but without waiting for K: after every pause of KEY_READ_MS. Only shown; the strict line
+  // above and the evaluation stay against the norm 1/3/7.
+  function scheduleRead() {
+    clearTimeout(S.readTimer);
+    S.readTimer = setTimeout(renderRead, KEY_READ_MS);
+  }
+
+  function renderRead() {
+    const el = $('#key-read');
+    const hand = $('#key-hand');
+    const tones = [...S.elements].sort((x, y) => x.start - y.start);
+    if (tones.length < KEY_READ_MIN) { el.hidden = true; hand.hidden = true; S.lastGm = null; return; }
+    const dec = decodeTones(tones, getSendWpm(), MORSE,
+      { machine: true, dot: S.hwDot, word: S.wordHint, model: true, gapPrior: S.gm });
+    S.lastGm = dec.gm || null;
+    const units = overUnits(dec);
+    const text = units ? segment(units, 'mid') : dec.text.trim();
+    if (!text) { el.hidden = true; hand.hidden = true; return; }
+    el.hidden = false;
+    showRead(el, t('key.read', { v: '\u0000' }), text, unsureMarks(units, text));
+    const g = dec.gm;
+    const n = g ? g.nk[0] + g.nk[1] : 0;
+    hand.hidden = !(g && n >= KEY_HAND_MIN && g.nk[1] >= 2);
+    if (!hand.hidden) {
+      hand.textContent = t('key.hand', { c: fmtNum(Math.exp(g.m[0]), 1), w: fmtNum(Math.exp(g.m[1]), 1) });
+    }
   }
 
   // ---------- 0.15.4: how the decoder reads (the last words gap by gap) ----------
@@ -627,6 +705,8 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     try { await flushTrace(); st.textContent = t('key.rec.sent'); } catch (e) { st.textContent = t('key.rec.fail'); }
   });
   function clearOut() {
+    if (S.lastGm) S.gm = S.lastGm.learned();   // 1.1.3: the hand stays learned for the next transcript
+    S.lastGm = null;
     S.elements = []; S.log = []; S.t0 = null; S.prev = null; S.presses = 0; S.paddles = []; S.events = [];
     renderOut(); renderLog();
   }
@@ -693,8 +773,12 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     /** 1.0.2: the characters / tempo of sending changed (Settings steppers on this page). */
     refresh() { renderEx(); renderLesson(); $('#send-wpm-key-msg').textContent = ''; },
     render() {
+      const fresh = !S.open;   // entering the page (not a re-render)
       S.open = true;
       probeWpmKey();
+      if (fresh) keyTempoTo(Math.round(getSendWpm())).then((w) => {   // 1.1.4: the key at the sending tempo of this page
+        if (w !== null && S.open) $('#send-wpm-key-msg').textContent = t('vo.key.set', { wpm: w });
+      });
       // 0.14.2: the CW Chat may have changed the shared key settings meanwhile
       Object.assign(cfg, load());
       // 0.11.1 (#28): opening the page is a tap too → unlock the audio now, the keep-alive tone (main.js) then keeps

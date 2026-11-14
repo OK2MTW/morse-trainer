@@ -30,7 +30,7 @@ import { initHead } from './headlesson.js';
 import { initEntry } from './entrytest.js';
 import { initDemo } from './demo.js';
 import { initBandLab } from './bandlab.js';
-import { initKeyerUi } from './keyerui.js';
+import { initKeyerUi, keyTempoTo } from './keyerui.js';
 import { renderUsers } from './usersui.js';
 import { initCwRoom } from './cwroomui.js';
 import { initCwBell } from './cwbell.js';
@@ -130,6 +130,7 @@ function show(name) {
   if (view === 'cw' && name !== 'cw') { cwRoom.stop(); voUi.stop(); }
   if (session.user && !session.user.pw_change && name !== 'cw') cwBell.start(); else cwBell.stop(); // 0.13.6
   if (view === 'vocab' && name !== 'vocab') vocab.stop();
+  const prev = view;
   view = name;
   rememberView(name); // before a possible update reload – the new version opens the same page
   if (updateReload.pending && !updateReload.done && UPDATE_SAFE_VIEWS.includes(name)) { reloadForUpdate(); return; }
@@ -152,7 +153,7 @@ function show(name) {
   if (name === 'demo') { demo.render(); demoBand.render(); }
   if (name === 'band') bandLab.render();
   if (name === 'key') { sendDefaults(); renderSteppers(); keyUi.render(); fwUi.show(); }
-  if (name === 'cw') cwRoom.render();
+  if (name === 'cw') { cwRoom.render(); if (prev !== 'cw') keyTempoTo(Math.round(settings.wpm)); }   // 1.1.4: the key at the receiving tempo
   if (name === 'vocab') vocab.render();
   if (name === 'copyhome') renderCopyCard();
   window.scrollTo(0, 0);

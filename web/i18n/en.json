@@ -1370,5 +1370,9 @@
  "vo.unsureSpace": "Unsure gap – the operator read it as a gap between words.",
  "vo.unsureJoin": "Unsure gap – the operator read it as a gap between characters (one word).",
  "vo.unsureLegend": "(_ / · = unsure gap, read as a gap between words / between characters)",
- "news.voLex": "The virtual operator reads the gaps by your hand and by a dictionary: at an unsure gap it picks the reading that makes sense (abbreviations, Q codes, call signs, RST, QSO words). The line “The operator read” shows unsure gaps dotted: _ = read as a gap between words, · = as one word. Wrong characters are still not corrected."
+ "news.voLex": "The virtual operator reads the gaps by your hand and by a dictionary: at an unsure gap it picks the reading that makes sense (abbreviations, Q codes, call signs, RST, QSO words). The line “The operator read” shows unsure gaps dotted: _ = read as a gap between words, · = as one word. Wrong characters are still not corrected.",
+ "key.read": "An operator would read: {v}",
+ "key.hand": "Your gaps: between characters ≈ {c}, between words ≈ {w} dots (norm 3 and 7). The evaluation is still against the norm.",
+ "news.keyRead": "Sending: below the strict reading there is a new line “An operator would read” – the same reading as the virtual operator's (the model of your hand and the lexicon), updated after every pause, no need to send K. Unsure gaps are dotted. It also shows your average gaps between characters and words. The lesson evaluation does not change.",
+ "news.keyTempoIn": "Opening Sending sets the key to the sending tempo, opening the CW Chat to the receiving tempo (over USB MIDI when switched on). Long pauses no longer confuse the line “An operator would read” – no need to clear the transcript."
 }

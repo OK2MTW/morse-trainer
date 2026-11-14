@@ -1404,5 +1404,9 @@
  "vo.unsureSpace": "Nejistá mezera – operátor ji přečetl jako mezeru mezi slovy.",
  "vo.unsureJoin": "Nejistá mezera – operátor ji přečetl jako mezeru mezi znaky (jedno slovo).",
  "vo.unsureLegend": "(_ / · = nejistá mezera, přečtená jako mezera mezi slovy / mezi znaky)",
- "news.voLex": "Virtuální operátor čte mezery podle tvé ruky i podle slovníku: u nejisté mezery zvolí čtení, které dává smysl (zkratky, Q-kódy, značky, RST, slova spojení). Nejisté mezery ukáže v řádku „Operátor četl“ tečkovaně: _ = přečetl jako mezeru mezi slovy, · = jako jedno slovo. Chybné znaky dál neopravuje."
+ "news.voLex": "Virtuální operátor čte mezery podle tvé ruky i podle slovníku: u nejisté mezery zvolí čtení, které dává smysl (zkratky, Q-kódy, značky, RST, slova spojení). Nejisté mezery ukáže v řádku „Operátor četl“ tečkovaně: _ = přečetl jako mezeru mezi slovy, · = jako jedno slovo. Chybné znaky dál neopravuje.",
+ "key.read": "Operátor by přečetl: {v}",
+ "key.hand": "Tvoje mezery: mezi znaky ≈ {c}, mezi slovy ≈ {w} teček (norma 3 a 7). Hodnocení se dál měří vůči normě.",
+ "news.keyRead": "Vysílání: pod přísným čtením je nově řádek „Operátor by přečetl“ – stejné čtení jako u virtuálního operátora (model tvé ruky a slovník), přepočítá se po každé pauze, bez čekání na K. Nejisté mezery jsou tečkované. Ukáže i tvoje průměrné mezery mezi znaky a slovy. Hodnocení lekcí se nemění.",
+ "news.keyTempoIn": "Klíč se při otevření Vysílání nastaví na tempo vysílání a při otevření CW Chatu na tempo příjmu (přes USB MIDI, když je zapnuté). Řádek „Operátor by přečetl“ už nezmatou dlouhé pauzy – přepis nemusíš mazat."
 }

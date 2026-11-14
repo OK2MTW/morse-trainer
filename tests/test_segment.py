@@ -123,6 +123,9 @@ class UnsureMarksTest(unittest.TestCase):
         self.assertIn('export function unsureMarks(units, read)', V.VO_JS)
         self.assertIn('h.marks = units && units.length ? unsureMarks(units, read) : null;', V.VO_JS)
         self.assertEqual(V.VO_UNSURE, 0.25)
-        for s in ("s.className = 'vo-unsure';", "t('vo.unsureLegend')", 'for (const [txt, unsure] of h.marks)'):
+        keyer = (root / 'web/js/keyerui.js').read_text(encoding='utf-8')
+        for s in ("t('vo.unsureLegend')", 'showRead(el,', 'h.marks);'):
             self.assertIn(s, voui)
+        for s in ("s.className = 'vo-unsure';", 'for (const [txt, unsure] of marks)'):   # 1.1.3: shared showRead
+            self.assertIn(s, keyer)
         self.assertIn('.vo-unsure {', (root / 'web/css/app.css').read_text(encoding='utf-8'))
