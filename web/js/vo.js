@@ -4,6 +4,7 @@
 // signs with one mistake, RST patterns, NAME / QTH, AGN / QRS / QRQ), answers in one of two modes and plays through
 // the band of the room (voui.js). It never keys the HW (H-21). Python port: tests/vo.py.
 import { QSO_NAMES, QSO_QTH, QSO_WX, QSO_RIG, QSO_ANT, QSO_PWR } from './content.js';
+import { VOCAB } from './vocab.js';
 
 export const VO_MODES = ['quick', 'chatty'];  // quick QSO / ragchew (topics)
 export const VO_REPLY_MS = 1500;   // the VO answers 1.5 s after an over that ended with K / KN / BK / SK / AR …
@@ -27,6 +28,7 @@ const FILLER = ['IS', 'HR', 'NR', 'OP', 'ES'];
 const RST_RE = /^[1-5][1-9N][1-9N]$/;
 const CALL_RE = /^(?=.*\d)(?=.*[A-Z])[A-Z0-9]{3,7}(\/[A-Z0-9]{1,3})?$/;
 
+const token = (tk) => tk.replace(/\?+$/, '');
 const pick = (list, rng) => list[Math.floor(rng() * list.length)];
 
 /** A nickname that looks like a call sign (a suggestion of the user's call). */
@@ -50,6 +52,182 @@ export function editDistance(a, b) {
 /** A heard token is the call sign: equal, or one mistake in a call of 4+ characters. */
 export const sameCall = (heard, callSign) => !!heard && !!callSign
   && (heard === callSign || (callSign.length >= 4 && editDistance(heard, callSign) <= 1));
+
+// 1.0.1: tolerance of the timing – gaps between characters / words that came out wrong are mended into known words
+// ("QR S" → QRS, "OK2 MTW" → the call, "QRSK" → QRS K). Only spacing: the characters must match exactly.
+export const VO_TOLS = ['auto', 'high', 'mid', 'off'];
+export const VO_TOL_JOIN = { high: 3, mid: 2, off: 0 };   // at most this many fragments joined into one word
+export const VO_WORDS = ['CQ', 'DE', 'QRS', 'QRQ', 'QRZ', 'AGN', 'RPT', 'RST', 'UR', 'NAME', 'OP', 'QTH', 'TU', 'TNX',
+  'FER', 'FB', '73', 'GB', 'GL', 'PSE', 'HR', 'ES', 'IS', 'GM', 'GA', 'GE', 'OM', 'YL', 'HW', 'CPY', 'QSO', 'DR', 'R'];
+const KNOWN = new Set([...VO_WORDS, ...VO_TOPICS, ...OVER_ENDS]);
+/** The tolerance by the step of the sending lessons (D4, index 0–3): characters / groups → high, words / QSO → mid. */
+export const tolForStep = (index) => (index >= 2 ? 'mid' : 'high');
+
+/** The over with its spacing mended (tol = high / mid / off); calls = the call signs of the QSO (exact match only). */
+export function mendSpacing(text, tol, calls = []) {
+  const tokens = text.trim().split(/\s+/).filter(Boolean);
+  const max = VO_TOL_JOIN[tol] || 0;
+  if (!max) return tokens.join(' ');
+  const cs = calls.filter(Boolean);
+  const known = (w) => KNOWN.has(w) || RST_RE.test(w) || cs.includes(w);
+  const out = [];
+  let i = 0;
+  while (i < tokens.length) {
+    let n = Math.min(max, tokens.length - i);
+    for (; n >= 2; n--) {
+      const part = tokens.slice(i, i + n);
+      if (part.slice(0, -1).some((tk) => tk.includes('?')) || part.some((tk) => !token(tk))) continue;
+      const q = part[n - 1].match(/\?*$/)[0];
+      const word = part.map(token).join('');
+      if (known(word)) { out.push(word + q); break; }
+    }
+    if (n >= 2) { i += n; continue; }
+    const tk = tokens[i++];
+    const base = token(tk);
+    const q = tk.slice(base.length);
+    let split = null;
+    if (!known(base)) {
+      for (let k = base.length - 1; k >= 1 && !split; k--) {
+        const a = base.slice(0, k);
+        const b = base.slice(k);
+        if (known(a) && known(b) && a.length >= 2 && (b.length >= 2 || OVER_ENDS.includes(b))) split = [a, b + q];
+      }
+    }
+    out.push(...(split || [tk]));
+  }
+  return out.join(' ');
+}
+
+// 1.1 K3: the spacing of an over from the gap model and a lexicon (Viterbi over the word boundaries). Every gap between
+// two characters has P(word gap) from the gap model of the hand (decoder GapModel); the best split of the over into
+// words maximises P(gaps)·P(text)^weight, P(text) = a product of word costs: a known word (VO words, topics, ends,
+// abbreviations, Q codes, QSO lists, the calls of the QSO) is cheap, a pattern (call, RST, number) a bit more, anything
+// else costs per word and per character. Characters are never changed (only the spacing). Python port: tests/vo.py.
+export const VO_LEX_WORD = 0.7;        // every word (against splitting into many short known words)
+export const VO_LEX_PATTERN = 1.2;     // a call-like word, RST, a number, a call within one character of a call of the QSO
+export const VO_LEX_UNKNOWN = 1.0;     // an unknown word …
+export const VO_LEX_CHAR = 1.0;        // … plus per character
+export const VO_LEX_PMIN = 0.03;       // P(word gap) clipped to [PMIN, 1 − PMIN]
+export const VO_LEX_LONG = 7;          // an unknown word longer than this is rare …
+export const VO_LEX_LONG_CHAR = 0.7;   // … per character over (joining two unknown words is not cheaper than two words)
+export const VO_LEX_MAXLEN = 16;       // the longest word considered
+export const VO_LEX_WEIGHT = { high: 1.5, mid: 1.0, off: 0.0 };   // the tolerance = the weight of the lexicon
+const NUM_RE = /^\d{1,4}[A-Z]{0,2}$/;
+const PROSIGN_NAMES = new Set(Object.values(PROSIGNS));
+let lexicon = null;
+const lex = () => lexicon || (lexicon = new Set([...KNOWN, ...QSO_NAMES, ...QSO_QTH, ...QSO_WX, ...QSO_RIG, ...QSO_ANT,
+  ...QSO_PWR, ...Object.values(VOCAB).flat()]));
+
+/** −log P(word) (up to a constant) for one word of an over; a trailing '?' is not part of the word. */
+export function wordCost(w, calls = []) {
+  const base = token(w);
+  if (!base || base.includes('?') || base.includes('*')) return VO_LEX_WORD + VO_LEX_UNKNOWN + VO_LEX_CHAR * w.length;
+  if (lex().has(base) || calls.includes(base)) return VO_LEX_WORD;
+  if (RST_RE.test(base) || NUM_RE.test(base) || looksLikeCall(base) || calls.some((c) => sameCall(base, c))) {
+    return VO_LEX_WORD + VO_LEX_PATTERN;
+  }
+  return VO_LEX_WORD + VO_LEX_UNKNOWN + VO_LEX_CHAR * base.length
+    + VO_LEX_LONG_CHAR * Math.max(0, base.length - VO_LEX_LONG);
+}
+
+/**
+ * units = [[text, pw]]: the characters of an over in order (a prosign as its name) with P(word gap) of the gap BEFORE
+ * it (null for the first; 1 = a fixed boundary). Returns the over as text with the most probable spacing.
+ */
+export function segment(units, tol = 'mid', calls = []) {
+  const lam = VO_LEX_WEIGHT[tol] ?? 1;
+  const cs = calls.filter(Boolean);
+  const isPro = (t) => PROSIGN_NAMES.has(t);
+  const join = (run, a, b) => run.slice(a, b).map(([t]) => t).join('');
+  // split into runs between fixed boundaries (prosigns, the start)
+  const runs = [];
+  let cur = [];
+  units.forEach(([t, pw], i) => {
+    const fixed = isPro(t) || (i > 0 && isPro(units[i - 1][0]));
+    if (cur.length && (pw == null || pw >= 1 || fixed)) { runs.push(cur); cur = []; }
+    cur.push([t, pw]);
+  });
+  if (cur.length) runs.push(cur);
+  const out = [];
+  for (const run of runs) {
+    const n = run.length;
+    if (n === 1 || isPro(run[0][0])) { out.push(join(run, 0, n)); continue; }
+    const split = [0];
+    const jsum = [0];             // jsum[k] = Σ join[1..k]; joins inside run[a:b] = jsum[b-1] − jsum[a]
+    for (let k = 1; k < n; k++) {
+      const p = Math.min(1 - VO_LEX_PMIN, Math.max(VO_LEX_PMIN, run[k][1]));
+      split.push(-Math.log(p));
+      jsum.push(jsum[k - 1] + -Math.log(1 - p));
+    }
+    const best = [0, ...new Array(n).fill(Infinity)];
+    const back = new Array(n + 1).fill(0);
+    for (let b = 1; b <= n; b++) {
+      for (let a = Math.max(0, b - VO_LEX_MAXLEN); a < b; a++) {
+        const c = best[a] + split[a] + (jsum[b - 1] - jsum[a]) + lam * wordCost(join(run, a, b), cs);
+        if (c < best[b]) { best[b] = c; back[b] = a; }
+      }
+    }
+    const words = [];
+    for (let b = n; b > 0; b = back[b]) words.push(join(run, back[b], b));
+    out.push(...words.reverse());
+  }
+  return out.join(' ');
+}
+
+/**
+ * The characters of an over decoded with the gap model (decodeTones opts.model) for segment: [[text, P(word gap
+ * before)]], a prosign as its name; null without the model. After the error sign the gap before the next character is
+ * the word gap that preceded the error sign (its index in the space).
+ */
+export function overUnits(dec) {
+  if (!dec || !dec.conf) return null;
+  const out = [];
+  let sp = null;
+  for (const c of dec.chars) {
+    if (c.ch === ' ') { sp = c.i0; continue; }
+    const i = sp === null ? c.i0 : sp;
+    const k = dec.gaps[i];
+    const p = dec.conf[i];
+    const pw = !out.length ? null : (p == null ? 1 : (k === 2 ? p : (k === 1 ? 1 - p : 0)));
+    out.push([PROSIGNS[c.code] || c.ch, pw]);
+    sp = null;
+  }
+  return out;
+}
+
+export const VO_UNSURE = 0.25;      // a gap with P(word gap) in [UNSURE, 1 − UNSURE] is shown as unsure (1.1 K4)
+
+/**
+ * The gaps of a read over (segment of units) the VO was unsure of: [[text, unsure]] in order – a word or a part of a
+ * word (unsure false), a space ' ' or a join '' (unsure true) at a gap with P(word gap) near 0.5; null when no gap was
+ * unsure or the read does not match the units. Only for showing; the reading itself does not change.
+ */
+export function unsureMarks(units, read) {
+  if (!units || !units.length || !read) return null;
+  const out = [];
+  let pos = 0;
+  let word = '';
+  let any = false;
+  for (let k = 0; k < units.length; k++) {
+    const [t, pw] = units[k];
+    let sep = '';
+    if (k > 0 && read[pos] === ' ') { sep = ' '; pos++; }
+    if (read.slice(pos, pos + t.length) !== t) return null;
+    pos += t.length;
+    const unsure = k > 0 && pw != null && pw < 1 && pw >= VO_UNSURE && pw <= 1 - VO_UNSURE
+      && !PROSIGN_NAMES.has(t) && !PROSIGN_NAMES.has(units[k - 1][0]);   // a prosign is always a word
+    if (unsure) {
+      if (word) out.push([word, false]);
+      out.push([sep, true]);
+      word = '';
+      any = true;
+    } else word += sep;
+    word += t;
+  }
+  if (pos !== read.length) return null;
+  if (word) out.push([word, false]);
+  return any ? out : null;
+}
 
 /** Text of a decoded over (decodeTones chars) with prosigns as words: SK, KN, AR, BK. */
 export function overText(chars) {
@@ -92,7 +270,6 @@ export function topicLine(topic, p) {
   }
 }
 
-const token = (tk) => tk.replace(/\?+$/, '');
 /** The value after a keyword (NAME / QTH / RST / UR), fillers like IS / HR skipped. */
 function after(tokens, keys) {
   for (let i = 0; i < tokens.length; i++) {
@@ -153,6 +330,7 @@ export class VirtualOperator {
     this.user = opts.userCall || '';
     this.userName = null;
     this.wpm = opts.wpm || VO_WPM;
+    this.tol = VO_TOL_JOIN[opts.tol] !== undefined ? opts.tol : 'off';  // 1.0.1: timing tolerance
     this.phase = 'listen';  // listen → cq → called / reported → rag → done
     this.last = null;
     const n = VO_TOPICS_MIN + Math.floor(this.rng() * (VO_TOPICS_MAX - VO_TOPICS_MIN + 1));
@@ -199,8 +377,17 @@ export class VirtualOperator {
     return `${this._hdr()} TNX FER QSO${dr} = 73 GL = ${this._hdr()} SK`;
   }
 
-  reply(text) {
-    const h = hear(text, this.p.call, this.user);
+  /** The over as the VO reads it: units (overUnits) → segment, else the spacing mended by the tolerance. */
+  read(text, units = null) {
+    const calls = [this.p.call, this.user];
+    return units && units.length ? segment(units, this.tol, calls) : mendSpacing(text, this.tol, calls);   // 1.1 K3: units → the model
+  }
+
+  reply(text, units = null) {
+    const read = this.read(text, units);
+    const h = hear(read, this.p.call, this.user);
+    h.read = read !== text.trim().split(/\s+/).filter(Boolean).join(' ') ? read : null;
+    h.marks = units && units.length ? unsureMarks(units, read) : null;   // 1.1 K4: the unsure gaps (only shown)
     if (h.from && !this.user) this.user = h.from;
     if (h.from && this.user && !sameCall(h.from, this.user) && this.phase === 'listen') this.user = h.from;
     if (h.name) this.userName = h.name;

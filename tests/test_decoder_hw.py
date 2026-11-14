@@ -69,7 +69,7 @@ class MachineDecoderTest(unittest.TestCase):
                      'const tu = (tn.u + tones[i - 1].u) / 2;', 'const g = (tn.g + tones[i - 1].g) / 2;',
                      'const u = (tu + g) / 2;', 'const x = (ms + (tu - g) / 2) / u;',
                      'const word = machineWordGap(human.slice(-DEC_MACH_GAPS), opts.word || DEC_MACH_WORD);',
-                     'kind = st.gap(ms, machineGapKind(x, 1, word));', 'if (x >= DEC_MACH_SPLIT) human.push(x);',
+                     'kind = st.gap(ms, gm ? gm.kinds[i] : machineGapKind(x, 1, word));', 'if (x >= DEC_MACH_SPLIT) human.push(x);',
                      'if (machine) { units.push(null); words.push(null); }',
                      'chars, marks, gaps, fixes, units, words,'):
             self.assertIn(frag, D.DECODER_JS)

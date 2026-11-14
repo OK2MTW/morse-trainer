@@ -277,7 +277,7 @@ class NavTest(unittest.TestCase):
         html = (web / "index.html").read_text()
         main = (web / "js" / "main.js").read_text()
         nav = re.search(r'<nav class="tabs">(.*?)<div class="usermenu">', html, re.S).group(1)
-        self.assertEqual(re.findall(r'data-go="(\w+)"', nav), ["login", "demo", "home", "copyhome", "vocab", "cw"])
+        self.assertEqual(re.findall(r'data-go="(\w+)"', nav), ["login", "demo", "home", "copyhome", "vocab", "key", "cw"])  # 1.0.2: Sending (key page)
         menu = re.search(r'<div id="user-menu".*?</div>', html, re.S).group(0)
         self.assertIn('data-go="stats"', menu)
         home = re.search(r'<section id="view-home".*?</section>', html, re.S).group(0)

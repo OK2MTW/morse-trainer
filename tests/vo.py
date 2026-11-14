@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Python port of web/js/vo.js (0.16.0 virtual operator of the CW room) – constants are read from the JS."""
+import math
 import re
 from pathlib import Path
 
@@ -53,6 +54,56 @@ def edit_distance(a, b):
 def same_call(heard, call_sign):
     return bool(heard) and bool(call_sign) and (
         heard == call_sign or (len(call_sign) >= 4 and edit_distance(heard, call_sign) <= 1))
+
+
+VO_TOLS = _list('VO_TOLS')
+VO_TOL_JOIN = {k: int(v) for k, v in re.findall(r"(\w+): (\d+)", re.search(r'VO_TOL_JOIN = \{(.*?)\};', VO_JS).group(1))}
+VO_WORDS = re.findall(r"'([^']*)'", re.search(r'VO_WORDS = \[(.*?)\];', VO_JS, re.S).group(1))
+KNOWN = set(VO_WORDS) | set(VO_TOPICS) | set(OVER_ENDS)
+
+
+def tol_for_step(index):
+    return 'mid' if index >= 2 else 'high'
+
+
+def mend_spacing(text, tol, calls=()):
+    tokens = text.split()
+    mx = VO_TOL_JOIN.get(tol, 0)
+    if not mx:
+        return ' '.join(tokens)
+    cs = [c for c in calls if c]
+
+    def known(w):
+        return w in KNOWN or bool(RST_RE.match(w)) or w in cs
+    out = []
+    i = 0
+    while i < len(tokens):
+        n = min(mx, len(tokens) - i)
+        while n >= 2:
+            part = tokens[i:i + n]
+            if not (any('?' in tk for tk in part[:-1]) or any(not _token(tk) for tk in part)):
+                q = part[-1][len(_token(part[-1])):]
+                word = ''.join(_token(tk) for tk in part)
+                if known(word):
+                    out.append(word + q)
+                    break
+            n -= 1
+        if n >= 2:
+            i += n
+            continue
+        tk = tokens[i]
+        i += 1
+        base = _token(tk)
+        q = tk[len(base):]
+        split = None
+        if not known(base):
+            for k in range(len(base) - 1, 0, -1):
+                a, b = base[:k], base[k:]
+                if known(a) and known(b) and len(a) >= 2 and (len(b) >= 2 or b in OVER_ENDS):
+                    split = [a, b + q]
+                    break
+        out.extend(split or [tk])
+    return ' '.join(out)
 
 
 def over_text(chars):
@@ -145,7 +196,7 @@ def greeting(hour):
 
 
 class VirtualOperator:
-    def __init__(self, mode='quick', user_call='', rng=None, hour=12, year=2026, wpm=None):
+    def __init__(self, mode='quick', user_call='', rng=None, hour=12, year=2026, wpm=None, tol='off'):
         self.mode = mode if mode in VO_MODES else 'quick'
         self.rng = rng
         self.p = persona(rng, year)
@@ -153,6 +204,7 @@ class VirtualOperator:
         self.user = user_call or ''
         self.user_name = None
         self.wpm = wpm or VO_WPM
+        self.tol = tol if tol in VO_TOL_JOIN else 'off'
         self.phase = 'listen'
         self.last = None
         n = VO_TOPICS_MIN + int(rng() * (VO_TOPICS_MAX - VO_TOPICS_MIN + 1))
@@ -196,8 +248,15 @@ class VirtualOperator:
         dr = f' {self.user_name}' if self.user_name else ''
         return f'{self._hdr()} TNX FER QSO{dr} = 73 GL = {self._hdr()} SK'
 
-    def reply(self, text):
-        h = hear(text, self.p['call'], self.user)
+    def read(self, text, units=None):
+        calls = [self.p['call'], self.user]
+        return segment(units, self.tol, calls) if units else mend_spacing(text, self.tol, calls)
+
+    def reply(self, text, units=None):
+        read = self.read(text, units)
+        h = hear(read, self.p['call'], self.user)
+        h['read'] = read if read != ' '.join(text.split()) else None
+        h['marks'] = unsure_marks(units, read) if units else None
         if h['from'] and not self.user:
             self.user = h['from']
         if h['from'] and self.user and not same_call(h['from'], self.user) and self.phase == 'listen':
@@ -286,3 +345,130 @@ def vo_timings(text, wpm, fwpm, morse):
                 els.append({'start': t, 'end': t + on, 'word': wi})
                 t += on + u
     return {'els': els, 'end': els[-1]['end'] if els else 0}
+
+
+# --- 1.1 K3: the spacing of an over from the gap model and a lexicon (Viterbi over the word boundaries) -------------
+# Every gap between two characters has P(word gap) from the gap model of the hand (decoder GapModel); the best split
+# of the over into words maximises P(gaps)·P(text)^weight, P(text) = a product of word costs: a known word (VO words,
+# topics, ends, abbreviations, Q codes, QSO lists, the calls of the QSO) is cheap, a pattern (call, RST, number) a bit
+# more, anything else costs per word and per character. Characters are never changed (only the spacing).
+# the constants live in web/js/vo.js (export const VO_LEX_*)
+VO_LEX_WORD = CONSTS['VO_LEX_WORD']
+VO_LEX_PATTERN = CONSTS['VO_LEX_PATTERN']
+VO_LEX_UNKNOWN = CONSTS['VO_LEX_UNKNOWN']
+VO_LEX_CHAR = CONSTS['VO_LEX_CHAR']
+VO_LEX_PMIN = CONSTS['VO_LEX_PMIN']
+VO_LEX_LONG = int(CONSTS['VO_LEX_LONG'])
+VO_LEX_LONG_CHAR = CONSTS['VO_LEX_LONG_CHAR']
+VO_LEX_MAXLEN = int(CONSTS['VO_LEX_MAXLEN'])
+VO_LEX_WEIGHT = {k: float(v) for k, v in re.findall(r"(\w+): ([\d.]+)",
+                                                    re.search(r'VO_LEX_WEIGHT = \{(.*?)\};', VO_JS).group(1))}
+NUM_RE = re.compile(r'^\d{1,4}[A-Z]{0,2}$')
+LEXICON = (KNOWN | {w for lst in QSO.values() for w in lst} | {k for t in C.VOCAB_QUIZ.values() for k in t})
+
+
+def word_cost(w, calls=()):
+    """−log P(word) (up to a constant) for one word of an over; a trailing '?' is not part of the word."""
+    base = _token(w)
+    if not base or '?' in base or '*' in base:
+        return VO_LEX_WORD + VO_LEX_UNKNOWN + VO_LEX_CHAR * len(w)
+    if base in LEXICON or base in calls:
+        return VO_LEX_WORD
+    if RST_RE.match(base) or NUM_RE.match(base) or looks_like_call(base) or any(same_call(base, c) for c in calls):
+        return VO_LEX_WORD + VO_LEX_PATTERN
+    return (VO_LEX_WORD + VO_LEX_UNKNOWN + VO_LEX_CHAR * len(base)
+            + VO_LEX_LONG_CHAR * max(0, len(base) - VO_LEX_LONG))
+
+
+def segment(units, tol='mid', calls=()):
+    """units = [(text, pw)]: the characters of an over in order (a prosign as its name) with P(word gap) of the gap
+    BEFORE it (None for the first; 1 = a fixed boundary). Returns the over as text with the most probable spacing."""
+    lam = VO_LEX_WEIGHT.get(tol, 1.0)
+    cs = tuple(c for c in calls if c)
+    out = []
+    # split into runs between fixed boundaries (prosigns, the start)
+    runs, cur = [], []
+    for i, (t, pw) in enumerate(units):
+        fixed = t in PROSIGN_CODES or (i and units[i - 1][0] in PROSIGN_CODES)
+        if cur and (pw is None or pw >= 1 or fixed):
+            runs.append(cur)
+            cur = []
+        cur.append((t, pw))
+    if cur:
+        runs.append(cur)
+    for run in runs:
+        if len(run) == 1 or run[0][0] in PROSIGN_CODES:
+            out.append(''.join(t for t, _ in run))
+            continue
+        n = len(run)
+        ps = [None] + [min(1 - VO_LEX_PMIN, max(VO_LEX_PMIN, run[k][1])) for k in range(1, n)]
+        split = [0.0] + [-math.log(p) for p in ps[1:]]
+        join = [0.0] + [-math.log(1 - p) for p in ps[1:]]
+        jsum = [0.0] * n                            # jsum[k] = Σ join[1..k]; joins inside run[a:b] = jsum[b-1] − jsum[a]
+        for k in range(1, n):
+            jsum[k] = jsum[k - 1] + join[k]
+        best, back = [0.0] + [math.inf] * n, [0] * (n + 1)
+        for b in range(1, n + 1):
+            for a in range(max(0, b - VO_LEX_MAXLEN), b):
+                w = ''.join(t for t, _ in run[a:b])
+                c = best[a] + split[a] + (jsum[b - 1] - jsum[a]) + lam * word_cost(w, cs)
+                if c < best[b]:
+                    best[b], back[b] = c, a
+        words, b = [], n
+        while b > 0:
+            a = back[b]
+            words.append(''.join(t for t, _ in run[a:b]))
+            b = a
+        out.extend(reversed(words))
+    return ' '.join(out)
+
+
+def over_units(dec):
+    """The characters of an over decoded with the gap model for segment: [(text, P(word gap before))], a prosign as
+    its name; None without the model. After the error sign the gap before the next character is the word gap that
+    preceded the error sign (its index in the space)."""
+    if not dec or dec.get('conf') is None:
+        return None
+    out, sp = [], None
+    for c in dec['chars']:
+        if c['ch'] == ' ':
+            sp = c['i0']
+            continue
+        i = c['i0'] if sp is None else sp
+        k, p = dec['gaps'][i], dec['conf'][i]
+        pw = None if not out else (1.0 if p is None else (p if k == 2 else 1 - p if k == 1 else 0.0))
+        out.append((PROSIGNS.get(c['code'], c['ch']), pw))
+        sp = None
+    return out
+
+
+VO_UNSURE = CONSTS['VO_UNSURE']
+
+
+def unsure_marks(units, read):
+    """The unsure gaps of a read over: [(text, unsure)] – words/parts (False), a space ' ' or a join '' (True) at a
+    gap with P(word gap) in [VO_UNSURE, 1 − VO_UNSURE]; None when no gap is unsure or the read does not match."""
+    if not units or not read:
+        return None
+    out, pos, word, any_ = [], 0, '', False
+    for k, (t, pw) in enumerate(units):
+        sep = ''
+        if k > 0 and read[pos:pos + 1] == ' ':
+            sep, pos = ' ', pos + 1
+        if read[pos:pos + len(t)] != t:
+            return None
+        pos += len(t)
+        if (k > 0 and pw is not None and pw < 1 and VO_UNSURE <= pw <= 1 - VO_UNSURE
+                and t not in PROSIGN_CODES and units[k - 1][0] not in PROSIGN_CODES):   # a prosign is always a word
+            if word:
+                out.append((word, False))
+            out.append((sep, True))
+            word, any_ = '', True
+        else:
+            word += sep
+        word += t
+    if pos != len(read):
+        return None
+    if word:
+        out.append((word, False))
+    return out if any_ else None

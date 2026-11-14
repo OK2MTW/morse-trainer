@@ -10,11 +10,13 @@ import { KeyLearn } from './keylearn.js';
 import { KeyInput, HW_TYPE, hwState } from './keyinput.js';
 import { logSummary, KEYLOG_MAX } from './keylog.js';
 import { traceOn, traceBegin, traceEnd, flushTrace } from './trace.js';
+import { KeyAuto } from './keyauto.js';
 import {
   sendMetrics, focusOf, evaluateSending, sessionSummary, sendTask, EVAL_WINDOW, SEND_KINDS, SEND_TASKS,
   SEND_END_MS, SEND_END_UNITS, handHabits, qsoReady,
 } from './sendeval.js';
 import { api } from './api.js';
+import { HwMidi, KEY_WPM_ID, sharedMidi, midiSwitchOn } from './hwmidi.js';
 
 const STORE = 'morse-key';
 const SEND_QUEUE = 'morse-send-q';  // 0.17.0: finished sending lessons not yet on the server (offline)
@@ -101,7 +103,7 @@ function writeQueue(q) {
   try { localStorage.setItem(SEND_QUEUE, JSON.stringify(q.slice(-SEND_QUEUE_MAX))); } catch (e) { /* private mode */ }
 }
 
-export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}, sync = null }) {
+export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => HW_WPM, onHwSeen = () => {}, sync = null }) {
   const cfg = load();
   const S = {
     elements: [], learn: null, learnTimer: null, log: [], t0: null, prev: null, presses: 0, manual: null, open: false,
@@ -113,11 +115,16 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
     lastDec: null,     // 0.15.4: the last decoding of the transcript (diagnostics)
   };
   const sidetoneOn = () => cfg.hwSidetone;
+  // 1.0.2: automatic recording of the keying (debug accounts) – a pure decoding, nothing learned from it
+  const auto = new KeyAuto('key', () => ({
+    type: cfg.type, stream: cfg.stream, lesson: X.lesson || null, chars: getChars().join(''),
+    wpm: S.hwDot ? Math.round(1200 / S.hwDot) : getSendWpm(),
+  }), (tones) => decodeTones(tones, getSendWpm(), MORSE, { machine: true, word: loadWordHint() }).text);
 
   /** Decoding of the tones of the page: the HW stream with machine timing (dec.tones then carry the elements). */
   function decode(tones) {
     if (tones.length <= 1 || S.wordHint === undefined) S.wordHint = loadWordHint(); // 0.16.3: a new record starts with the hand's threshold
-    const dec = decodeTones(tones, HW_WPM, MORSE, { machine: true, dot: S.hwDot, word: S.wordHint });
+    const dec = decodeTones(tones, getSendWpm(), MORSE, { machine: true, dot: S.hwDot, word: S.wordHint }); // 1.0.2: own sending tempo
     if (tones.length) { S.hwDot = dec.dot; saveWordHint(dec); }
     return dec;
   }
@@ -127,6 +134,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
   // does not enter decoding.
   function addElement(el, start, end) {
     S.elements.push({ el, start, end });
+    auto.tone({ el, start, end });
     if (X.phase === 'send') exTone({ el, start, end });
     if (S.elements.length > ELEMENTS_MAX) S.elements.splice(0, S.elements.length - ELEMENTS_MAX);
     renderOut();
@@ -282,6 +290,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
     const dec = decode(tones);
     const ev = evaluateSending(X.target, dec.tones, dec, MORSE);
     S.exRec.push({ target: X.target, text: dec.text, tones: tones.map(rnd) });
+    auto.item({ target: X.target, text: dec.text, tones: tones.map(rnd) });
     if (S.exRec.length > EXREC_MAX) S.exRec.shift();
     ev.text = dec.text;
     X.results.push(ev);
@@ -659,9 +668,33 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
   window.addEventListener('blur', lost);
   document.addEventListener('visibilitychange', () => { if (document.hidden) lost(); });
 
+  // ---------- 1.0.2: the sending tempo onto the key (USB MIDI, only when the key answers) ----------
+  async function probeWpmKey() {
+    let ok = false;
+    if (midiSwitchOn() && HwMidi.supported()) {
+      try {
+        const m = sharedMidi();
+        ok = (m.connected() || await m.open()) && !!(m.info || await m.getInfo());
+      } catch (e) { ok = false; }
+    }
+    $('#send-wpm-key').hidden = !ok;
+  }
+  $('#send-wpm-key').addEventListener('click', async () => {
+    const w = getSendWpm();
+    const msg = $('#send-wpm-key-msg');
+    try {
+      const d = await sharedMidi().set(KEY_WPM_ID, w);
+      if (d.type !== 'ack') throw new Error(d.reason || 'reply');
+      msg.textContent = t('vo.key.set', { wpm: w });
+    } catch (e) { msg.textContent = t('vo.key.err'); }
+  });
+
   return {
+    /** 1.0.2: the characters / tempo of sending changed (Settings steppers on this page). */
+    refresh() { renderEx(); renderLesson(); $('#send-wpm-key-msg').textContent = ''; },
     render() {
       S.open = true;
+      probeWpmKey();
       // 0.14.2: the CW Chat may have changed the shared key settings meanwhile
       Object.assign(cfg, load());
       // 0.11.1 (#28): opening the page is a tap too → unlock the audio now, the keep-alive tone (main.js) then keeps
@@ -678,6 +711,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, onHwSeen = () => {}
     },
     stop() {
       S.open = false;
+      auto.flush();
       if (S.learn) S.learn.cancel();
       learnEnd();
       releaseAll();

@@ -53,6 +53,15 @@ export function traceEnd(lessonId, extra) {
   write(qKey(uid), q.slice(-Q_MAX));
 }
 
+/** 1.0.2: a whole record at once (automatic key recording) – does not touch a lesson record in progress. */
+export function tracePush(kind, data) {
+  if (!enabled || uid == null) return false;
+  const q = read(qKey(uid), []);
+  q.push({ lesson_id: null, kind, at: new Date().toISOString(), data });
+  write(qKey(uid), q.slice(-Q_MAX));
+  return true;
+}
+
 /** Audio context state – changes (suspended/running/interrupted) are written to the record. */
 export function traceAudio(ctx) {
   if (!ctx || ctxHooked === ctx) return;

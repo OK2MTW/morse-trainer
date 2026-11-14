@@ -11,9 +11,11 @@ import { decodeTones, loadWordHint, saveWordHint } from './decoder.js';
 import { MORSE } from './charset.js';
 import {
   VirtualOperator, VO_MODES, VO_REPLY_MS, VO_SILENCE_MS, VO_WPM, VO_WPM_MIN, VO_WPM_MAX, overText, overEnded,
-  voTimings, looksLikeCall,
-  VO_QRS,
+  voTimings, looksLikeCall, VO_TOLS, tolForStep,
+  VO_QRS, overUnits,
 } from './vo.js';
+import { api } from './api.js';
+import { KeyAuto } from './keyauto.js';
 import { HwMidi, KeyTempo, KEY_WPM_ID, sharedMidi, midiSwitchOn } from './hwmidi.js';
 
 const $ = (s) => document.querySelector(s);
@@ -22,7 +24,7 @@ const WPM_CHOICES = ['auto', 12, 15, 18, 20, 22, 25, 28, 30, 35];
 const FW_CHOICES = [0, 15, 12, 10, 8];
 const SHOW = ['after', 'live', 'hide'];
 const PRESETS = ['clean', 'qsb', 'flutter', 'qrn', 'qrm', 'evening'];
-const DEFAULTS = { mode: 'quick', call: '', wpm: 'auto', fw: 0, show: 'after', preset: 'clean', keyTempo: false };
+const DEFAULTS = { mode: 'quick', call: '', wpm: 'auto', fw: 0, show: 'after', preset: 'clean', keyTempo: false, tol: 'auto' };
 const NOISE = 0.08;          // a weak noise always (the "min" of the CW room)
 const PEER_OFFSET_HZ = 50;   // the VO sounds 50 Hz above the own sidetone (as the other station in the room)
 const LEAD_MS = 120;         // a word of the VO is put on the band this long before it sounds
@@ -36,6 +38,7 @@ function load() {
     if (!WPM_CHOICES.includes(p.wpm)) p.wpm = DEFAULTS.wpm;
     if (!FW_CHOICES.includes(p.fw)) p.fw = DEFAULTS.fw;
     if (!SHOW.includes(p.show)) p.show = DEFAULTS.show;
+    if (!VO_TOLS.includes(p.tol)) p.tol = DEFAULTS.tol;
     if (!PRESETS.includes(p.preset)) p.preset = DEFAULTS.preset;
     p.keyTempo = p.keyTempo === true;
     p.call = typeof p.call === 'string' ? p.call.slice(0, 12) : '';
@@ -51,9 +54,13 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
   const prefs = load();
   const V = {
     on: false, running: false, vo: null, cfg: null, input: null, band: new LiveBand(player), manual: null,
-    tones: [], timer: null, play: null, lines: [], heard: null, dot: 1200 / HW_WPM, wpmSet: false,
+    tones: [], gm: null, timer: null, play: null, lines: [], heard: null, dot: 1200 / HW_WPM, wpmSet: false,
     kt: null, ktOff: null, ktBusy: false, keyOk: false,
+    sendIdx: null,   // 1.0.1: the step of the sending lessons (D4) for the automatic tolerance; null = not known
   };
+  // 1.0.2: automatic recording of the own overs (debug accounts) – what the decoder and the VO read
+  const auto = new KeyAuto('vo', () => ({ type: 'hw', wpm: Math.round(1200 / V.dot), tol: V.vo?.tol || null }),
+    (tones) => overText(decodeTones(tones, HW_WPM, MORSE, { machine: true, word: loadWordHint() }).chars));
   const toCtx = (ms) => player.ctx.currentTime + (ms - performance.now()) / 1000;
 
   // ---------- panel ----------
@@ -62,6 +69,7 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
     for (const m of VO_MODES) $('#cw-vo-mode').add(new Option(t(`vo.mode.${m}`), m));
     for (const w of WPM_CHOICES) $('#cw-vo-wpm').add(new Option(w === 'auto' ? t('vo.wpmAuto') : `${w} WPM`, String(w)));
     for (const f of FW_CHOICES) $('#cw-vo-fw').add(new Option(f ? `${f} WPM` : t('vo.fwOff'), String(f)));
+    for (const v of VO_TOLS) $('#cw-vo-tol').add(new Option(t(`vo.tol.${v}`), v));
     for (const s of SHOW) $('#cw-vo-show').add(new Option(t(`vo.show.${s}`), s));
     for (const k of PRESETS) $('#cw-vo-preset').add(new Option(k === 'clean' ? t('cw.presetNone') : t(`band.preset.${k}`), k));
   }
@@ -75,6 +83,8 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
     $('#cw-vo-wpm').value = String(prefs.wpm);
     $('#cw-vo-fw').value = String(prefs.fw);
     $('#cw-vo-show').value = prefs.show;
+    $('#cw-vo-tol').value = prefs.tol;
+    renderTolHint();
     $('#cw-vo-preset').value = prefs.preset;
     $('#cw-vo-keytempo').checked = prefs.keyTempo;
     $('#cw-vo-keytempo-row').hidden = !V.keyOk;
@@ -91,9 +101,28 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
     prefs.wpm = w === 'auto' ? 'auto' : Number(w);
     prefs.fw = Number($('#cw-vo-fw').value);
     prefs.show = $('#cw-vo-show').value;
+    prefs.tol = $('#cw-vo-tol').value;
     prefs.preset = $('#cw-vo-preset').value;
     if (V.keyOk) prefs.keyTempo = $('#cw-vo-keytempo').checked;
     save(prefs);
+  }
+
+  // ---------- 1.0.1: tolerance of the timing by the level of the sender ----------
+  /** The tolerance in use: the chosen one, or by the step of the sending lessons (unknown / none yet → high). */
+  const tolNow = () => (prefs.tol !== 'auto' ? prefs.tol : tolForStep(V.sendIdx ?? 0));
+
+  function renderTolHint() {
+    const v = $('#cw-vo-tol').value;
+    $('#cw-vo-tol-hint').textContent = v === 'auto'
+      ? t('vo.tolHint.auto', { v: t(`vo.tol.${tolForStep(V.sendIdx ?? 0)}`) }) : t(`vo.tolHint.${v}`);
+  }
+
+  async function loadSendStep() {
+    try {
+      const d = await api('GET', '/send');
+      V.sendIdx = d?.state?.index ?? 0;
+    } catch (e) { /* offline: high */ }
+    if (V.on && !V.running) renderTolHint();
   }
 
   function open() {
@@ -103,6 +132,7 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
     renderSetup();
     $('#cw-vo').scrollIntoView({ block: 'nearest' });
     probeKey();
+    loadSendStep();
   }
 
   // ---------- 0.16.4 (Z-26): the user's QRS / QRQ changes the tempo of the HW key over USB MIDI ----------
@@ -185,11 +215,12 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
     const now = new Date();
     V.vo = new VirtualOperator({
       mode: prefs.mode, userCall: prefs.call, hour: now.getHours(), year: now.getFullYear(),
-      wpm: prefs.wpm === 'auto' ? VO_WPM : prefs.wpm,
+      wpm: prefs.wpm === 'auto' ? VO_WPM : prefs.wpm, tol: tolNow(),
     });
     V.wpmSet = prefs.wpm !== 'auto';
     V.lines = [];
     V.tones = [];
+    V.gm = null;
     V.heard = null;
     V.running = true;
     keyTempoStart();
@@ -210,6 +241,7 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
     V.input?.releaseAll();
     V.band.stop();
     V.running = false;
+    auto.flush();
     keyTempoStop();
   }
 
@@ -230,9 +262,12 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
     renderTrx();
   }
 
-  const decodeOwn = () => {
+  // 1.1 K2: model = what the VO reads (the end of an over, the over ends on K / SK …): the gaps from the gap model
+  // of the whole over and of the hand learned in the earlier overs (V.gm); the live line keeps the 1.0 reading
+  const decodeOwn = (model = false) => {
     if (V.tones.length <= 1 || V.wordHint === undefined) V.wordHint = loadWordHint(); // 0.16.3: every over starts with the hand's threshold
-    const dec = decodeTones(V.tones, HW_WPM, MORSE, { machine: true, dot: V.dot, word: V.wordHint });
+    const dec = decodeTones(V.tones, HW_WPM, MORSE,
+      { machine: true, dot: V.dot, word: V.wordHint, model, gapPrior: V.gm });
     if (V.tones.length) saveWordHint(dec);
     return dec;
   };
@@ -240,20 +275,25 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
   /** The end of the over: VO_REPLY_MS after K / KN / BK / SK / AR, else VO_SILENCE_MS of silence. */
   function armEnd() {
     clearTimeout(V.timer);
-    const text = overText(decodeOwn().chars);
+    const own = decodeOwn(true);
+    const text = V.vo.read(overText(own.chars), overUnits(own));   // 1.0.1: "S K" also ends the over; 1.1 K3 spacing
     V.timer = setTimeout(endOver, overEnded(text) ? VO_REPLY_MS : VO_SILENCE_MS);
   }
 
   function endOver() {
     if (V.manual !== null || !V.tones.length || !V.running) return;
-    const dec = decodeOwn();
+    const dec = decodeOwn(true);
     V.dot = dec.dot;
+    if (dec.gm) V.gm = dec.gm.learned();   // 1.1 K2: the model of the hand for the next over
     const text = overText(dec.chars);
+    const t0 = V.tones[0].start;
+    const overTones = V.tones.map((tn) => ({ s: Math.round((tn.start - t0) * 10) / 10, e: Math.round((tn.end - t0) * 10) / 10 }));
     V.tones = [];
     if (!V.wpmSet && text) { V.vo.wpm = clampWpm(dec.wpm); V.wpmSet = true; }   // the VO at the speed of the key
     pushLine('me', text || '?');
-    const r = V.vo.reply(text);
+    const r = V.vo.reply(text, overUnits(dec));   // 1.1 K3: the spacing from P(gap)·P(text)
     V.heard = r.heard;
+    auto.item({ text, read: r.heard?.read || null, tones: overTones });
     keyTempoReply(r.heard);
     if (r.text) playVo(r.text, r.wpm);
     renderAll();
@@ -360,7 +400,24 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
     if (h.qrs) parts.push('QRS');
     if (h.qrq) parts.push('QRQ');
     if (h.bye) parts.push('73 / SK');
-    el.textContent = parts.length ? t('vo.heard', { v: parts.join(' · ') }) : t('vo.heardNothing');
+    const heard = parts.length ? t('vo.heard', { v: parts.join(' · ') }) : t('vo.heardNothing');
+    if (!h.marks) { el.textContent = h.read ? `${t('vo.read', { v: h.read })} ${heard}` : heard; return; }   // 1.0.1
+    // 1.1 K4: the unsure gaps of the read over – a dotted '_' (read as a space) or '·' (read as one word)
+    const [pre, post] = t('vo.read', { v: '\u0000' }).split('\u0000');
+    el.textContent = pre;
+    for (const [txt, unsure] of h.marks) {
+      if (!unsure) { el.append(txt); continue; }
+      const s = document.createElement('span');
+      s.className = 'vo-unsure';
+      s.textContent = txt === ' ' ? '_' : '·';
+      s.title = t(txt === ' ' ? 'vo.unsureSpace' : 'vo.unsureJoin');
+      el.append(s);
+    }
+    el.append(`${post} ${heard} `);
+    const lg = document.createElement('span');
+    lg.className = 'vo-unsure-legend';
+    lg.textContent = t('vo.unsureLegend');
+    el.append(lg);
   }
 
   function renderAll() {
@@ -373,6 +430,7 @@ export function initVoUi({ player, ensureAudio, getNick, isLinked }) {
   // ---------- events ----------
   document.addEventListener('cw-vo-open', open);
   $('#cw-vo-mode').addEventListener('change', () => { $('#cw-vo-mode-hint').textContent = t(`vo.modeHint.${$('#cw-vo-mode').value}`); });
+  $('#cw-vo-tol').addEventListener('change', renderTolHint);
   $('#cw-vo-start').addEventListener('click', start);
   $('#cw-vo-close').addEventListener('click', close);
   $('#cw-vo-end').addEventListener('click', close);

@@ -36,7 +36,6 @@ import { initCwRoom } from './cwroomui.js';
 import { initCwBell } from './cwbell.js';
 import { initCwChannel } from './cwchannel.js';
 import { initVoUi } from './voui.js';
-import { SEND_MIN_CHARS } from './sendeval.js';
 import { initDemoBand } from './demoband.js';
 import { initVocab } from './vocabui.js';
 import { showVisitCount } from './visitcount.js';
@@ -152,7 +151,7 @@ function show(name) {
   if (name === 'quiz') openQuiz();
   if (name === 'demo') { demo.render(); demoBand.render(); }
   if (name === 'band') bandLab.render();
-  if (name === 'key') { keyUi.render(); fwUi.show(); }
+  if (name === 'key') { sendDefaults(); renderSteppers(); keyUi.render(); fwUi.show(); }
   if (name === 'cw') cwRoom.render();
   if (name === 'vocab') vocab.render();
   if (name === 'copyhome') renderCopyCard();
@@ -194,8 +193,16 @@ const demo = initDemo({
 const bandLab = initBandLab({ player, ensureAudio }); // ZB listening lab (development, coaches)
 // VK (0.11.0): telegraph key (experimental, coaches); 0.12.0 sending exercise from the receive level (≥ 10 characters)
 const fwUi = initFwUi(); // 0.15.0: HW key firmware on the key page
-const keyUi = initKeyerUi({ player, ensureAudio, getChars: () => charsForLevel(Math.max(SEND_MIN_CHARS, lvl())),
-  onHwSeen: () => fwUi.hwSeen(), sync });
+// 1.0.2 (Martin): sending has its own characters and tempo; the first time they are taken from receiving
+const sendLvl = () => Math.min(maxLvl(), Math.max(2, settings.sendChars || lvl()));
+function sendDefaults() {
+  let changed = false;
+  if (!settings.sendChars) { settings.sendChars = Math.max(2, lvl()); changed = true; }
+  if (!settings.sendWpm) { settings.sendWpm = settings.wpm; changed = true; }
+  if (changed) saveSettings();
+}
+const keyUi = initKeyerUi({ player, ensureAudio, getChars: () => charsForLevel(sendLvl()),
+  getSendWpm: () => settings.sendWpm || settings.wpm, onHwSeen: () => fwUi.hwSeen(), sync });
 const cwLink = {}; // 0.13.2: the channel (keying, playback) – filled below, the room calls it on every poll
 const cwRoom = initCwRoom({ player, ensureAudio, onAuth: () => sessionExpired(), link: cwLink }); // 0.13.1
 // 0.13.6: who knocks while I am elsewhere in the app – no sound in a lesson or on a sound page
@@ -1012,12 +1019,15 @@ function renderSteppers() {
     const v = target(d)[d.key];
     out.textContent = Math.round(v * Number(d.scale || 1)) + (d.unitKey ? t(d.unitKey) : d.unit);
     minus.disabled = v <= Number(d.min) + 1e-9;
-    plus.disabled = v >= Number(d.max) - 1e-9 || (d.key === 'fwpm' && v >= settings.wpm);
+    plus.disabled = v >= Number(d.max) - 1e-9 || (d.key === 'fwpm' && v >= settings.wpm)
+      || (d.key === 'sendChars' && v >= maxLvl());
   }
+  $('#send-chars-list').textContent = `(${charsForLevel(sendLvl()).join(' ')})`;
   $('#wpm-warn').hidden = settings.wpm >= 15;
   $('#auto-speed').checked = settings.autoSpeed !== 0;
   $('#extra-chars').checked = settings.extraChars === 1;
   for (const sel of document.querySelectorAll('.lang-select')) sel.value = lang;
+  renderTheme();
 }
 $('#auto-speed').addEventListener('change', (e) => {
   settings.autoSpeed = e.target.checked ? 1 : 0;
@@ -1043,6 +1053,7 @@ function initSteppers() {
         if (settings.fwpm > settings.wpm) settings.fwpm = settings.wpm; // gaps must not be faster than the character
         if (d.target === 'progress') saveProgress(); else saveSettings();
         renderSteppers();
+        if (d.key.startsWith('send')) keyUi.refresh();
       });
       return b;
     };
@@ -1053,6 +1064,31 @@ function initSteppers() {
     steppers.push({ el, out, minus, plus });
   }
 }
+
+// ---- 1.0.2: Settings topics – one open at a time (also where <details name> is not supported) ----
+for (const d of document.querySelectorAll('#view-settings details.set-sec')) {
+  d.addEventListener('toggle', () => {
+    if (!d.open) return;
+    for (const x of document.querySelectorAll('#view-settings details.set-sec')) if (x !== d) x.open = false;
+  });
+}
+
+// ---- 1.0.2: appearance – light / dark / by the system / by day and night; this device only (js/theme.js) ----
+const fmtClock = (m) => { const r = Math.round(m); return `${Math.floor(r / 60)}:${String(r % 60).padStart(2, '0')}`; };
+function renderTheme() {
+  const th = window.morseTheme;
+  const sel = $('#theme-select');
+  if (!th || !sel) return;
+  if (!sel.options.length) for (const m of th.MODES) sel.add(new Option(t(`settings.theme.${m}`), m));
+  else for (const o of sel.options) o.text = t(`settings.theme.${o.value}`);
+  sel.value = th.get();
+  const now = new Date();
+  const s = th.sunTimes(now);
+  $('#theme-hint').textContent = sel.value === 'sun'
+    ? t('settings.themeHint.sun', { rise: fmtClock(s.rise), set: fmtClock(s.set) })
+    : t(`settings.themeHint.${sel.value}`);
+}
+$('#theme-select')?.addEventListener('change', (e) => { window.morseTheme?.set(e.target.value); renderTheme(); });
 
 // ---- language (I18N): login page and Settings; stored locally and, when logged in, in the account settings ----
 function initLangSelects() {

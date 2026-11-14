@@ -315,6 +315,165 @@ class DecoderState {
   unit() { return (this.dot + this.dash / 3) / 2; }
 }
 
+// 1.1 K2: a gap model of the hand (Bell 1977: probabilities of gap classes instead of a threshold). Machine stream
+// only: a gap < DEC_MACH_SPLIT dots is inside a character (the keyer makes it); the human gaps are a mixture of two
+// log-normal classes – between characters / between words. Prior = the norm 3/7 with pseudocounts (cold start: a few
+// gaps already move it), learned by EM (MAP) over the whole over plus what was learned in the earlier overs of the
+// session (the model of the other station's hand). Every gap gets the probability of its class. Python port:
+// tests/decoder.py GapModel (reads these constants).
+export const DEC_GM_CHAR = 3;         // prior means (dots) between characters …
+export const DEC_GM_WORD = 7;         // … and between words
+export const DEC_GM_SD = 0.25;        // prior spread (log)
+export const DEC_GM_SD_MIN = 0.1;     // learned spread at least
+export const DEC_GM_NPRIOR = 3;           // pseudocounts of the prior per class
+export const DEC_GM_KEEP = 40;        // learned counts carried to the next over at most (both classes)
+export const DEC_GM_SEP = 1.25;       // the two class means apart at least 1.25×
+export const DEC_GM_ITER = 15;
+export const DEC_GM_W_WORD = 0.28;    // prior share of word gaps among the human gaps …
+export const DEC_GM_W_N = 20;         // … worth 20 gaps
+export const DEC_GM_WIN = 6;          // the tempo of the hand from ±6 neighbouring human gaps …
+export const DEC_GM_SHRINK = 2;       // … shrunk towards the mean tempo (2 gaps' worth)
+export const DEC_GM_MIN = 6;          // the EM starts from a split of the data with at least 6 human gaps
+
+/** Two-class log-normal mixture of human gaps (in dots). prior = learned() of an earlier over or null (= norm). */
+export class GapModel {
+  constructor(prior = null) {
+    if (prior) {
+      this.m0 = [...prior.m]; this.s0 = [...prior.s]; this.n0 = prior.n.map((n) => Math.max(1, n));
+    } else {
+      this.m0 = [Math.log(DEC_GM_CHAR), Math.log(DEC_GM_WORD)];
+      this.s0 = [DEC_GM_SD, DEC_GM_SD]; this.n0 = [DEC_GM_NPRIOR, DEC_GM_NPRIOR];
+    }
+    this.m = [...this.m0]; this.s = [...this.s0]; this.w = [0.75, 0.25];
+    this.nk = [0, 0]; this.hs = []; this.off = [];
+  }
+
+  resp(h) {
+    const p = [0, 1].map((c) => this.w[c] / this.s[c] * Math.exp(-0.5 * ((h - this.m[c]) / this.s[c]) ** 2));
+    const t = p[0] + p[1];
+    if (!(t > 0)) return Math.abs(h - this.m[0]) < Math.abs(h - this.m[1]) ? [1, 0] : [0, 1];
+    return [p[0] / t, p[1] / t];
+  }
+
+  // EM from a split of the data, not from the prior (from 3/7 a slow hand's gaps between characters around 6–8 dots
+  // pulled the word class down – a local optimum): Otsu – the split with the largest between-class variance
+  start(hs) {
+    if (hs.length < DEC_GM_MIN) return;
+    const h = [...hs].sort((a, b) => a - b);
+    const n = h.length;
+    const tot = h.reduce((a, b) => a + b, 0);
+    let best = -1, k = 0, acc = 0;
+    for (let i = 1; i < n; i++) {
+      acc += h[i - 1];
+      const a = acc / i, b = (tot - acc) / (n - i);
+      const v = i * (n - i) * (b - a) ** 2;
+      if (v > best) { best = v; k = i; }
+    }
+    const a = h.slice(0, k).reduce((x, y) => x + y, 0) / k;
+    const b = h.slice(k).reduce((x, y) => x + y, 0) / (n - k);
+    if (b - a >= Math.log(DEC_GM_SEP)) { this.m = [a, b]; this.w = [k / n, (n - k) / n]; }
+  }
+
+  /**
+   * EM over the human gaps of an over (time order) with a slowly changing tempo of the hand: every gap has an offset
+   * (log) = the smoothed residual of its neighbours (±DEC_GM_WIN gaps), shrunk towards 0 (the hand drifts during a
+   * session – globally the classes overlap, locally not).
+   */
+  fit(xs) {
+    const hs = xs.map((x) => Math.log(x));
+    const n = hs.length;
+    this.hs = hs; this.off = new Array(n).fill(0);
+    this.start(hs);
+    const reach = 3 * DEC_GM_WIN;
+    const sep = Math.log(DEC_GM_SEP);
+    for (let it = 0; it < (n ? DEC_GM_ITER : 0); it++) {
+      const zs = hs.map((h, i) => h - this.off[i]);
+      const rs = zs.map((z) => this.resp(z));
+      let vs = 0, ns = 0;
+      for (const c of [0, 1]) {
+        let nk = 0, sz = 0;
+        rs.forEach((r, i) => { nk += r[c]; sz += r[c] * zs[i]; });
+        const tot = this.n0[c] + nk;
+        const m = (this.n0[c] * this.m0[c] + sz) / tot;
+        // the spread has its own prior and is common to both classes (a wide word class took the slow gaps between
+        // characters – self-reinforcing)
+        vs += this.n0[c] * this.s0[c] ** 2;
+        rs.forEach((r, i) => { vs += r[c] * (zs[i] - m) ** 2; });
+        ns += tot;
+        this.m[c] = m; this.nk[c] = nk;
+      }
+      const sd = Math.max(DEC_GM_SD_MIN, Math.sqrt(vs / ns));
+      this.s = [sd, sd];
+      if (this.m[1] - this.m[0] < sep) {
+        const mid = (this.m[0] + this.m[1]) / 2;
+        this.m = [mid - sep / 2, mid + sep / 2];
+      }
+      // the share of word gaps has its own prior (a text has ~1 word gap per 3–4 gaps between characters)
+      const pw = [1 - DEC_GM_W_WORD, DEC_GM_W_WORD];
+      const t = DEC_GM_W_N + this.nk[0] + this.nk[1];
+      this.w = [0, 1].map((c) => (DEC_GM_W_N * pw[c] + this.nk[c]) / t);
+      if (n >= DEC_GM_MIN && it >= 2) {
+        const res = hs.map((h, i) => h - (rs[i][0] * this.m[0] + rs[i][1] * this.m[1]));
+        const off = [];
+        for (let i = 0; i < n; i++) {
+          let a = 0, b = DEC_GM_SHRINK;
+          for (let j = Math.max(0, i - reach); j < Math.min(n, i + reach + 1); j++) {
+            const k = Math.exp(-0.5 * ((i - j) / DEC_GM_WIN) ** 2);
+            a += k * res[j]; b += k;
+          }
+          off.push(a / b);
+        }
+        this.off = off;
+      }
+    }
+    return this;
+  }
+
+  /** P(word gap) of every human gap of the fitted over (with its local tempo). */
+  wordProbs() { return this.hs.map((h, i) => this.resp(h - this.off[i])[1]); }
+
+  /** P(word gap | x dots) for a human gap at the mean tempo. */
+  wordProb(x) { return this.resp(Math.log(x))[1]; }
+
+  /** The model for the next over: means, spreads and counts (capped in proportion – the hand may change). */
+  learned() {
+    const n = [0, 1].map((c) => this.n0[c] + this.nk[c]);
+    const k = Math.min(1, DEC_GM_KEEP / (n[0] + n[1]));
+    return { m: [...this.m], s: [...this.s], n: n.map((v) => k * v) };
+  }
+}
+
+/** Gaps of a machine stream (output of machineTones) in local dots, as decodeTones computes them; null first. */
+export function machineUnits(tones) {
+  return tones.map((tn, i) => {
+    if (!i) return null;
+    const pv = tones[i - 1];
+    const tu = (tn.u + pv.u) / 2;
+    const g = (tn.g + pv.g) / 2;
+    const u = (tu + g) / 2;
+    return (tn.start - pv.end + (tu - g) / 2) / u;
+  });
+}
+
+/**
+ * 1.1 K2: the gap classes of one over from the gap model → {kinds, conf, gm}. kinds[i] = 0/1/2 (null first),
+ * conf[i] = the probability of the chosen class.
+ */
+export function modelGaps(units, prior = null) {
+  const gm = new GapModel(prior).fit(units.slice(1).filter((x) => x >= DEC_MACH_SPLIT));
+  const probs = gm.wordProbs();
+  let k = 0;
+  const kinds = [null];
+  const conf = [null];
+  for (const x of units.slice(1)) {
+    if (x < DEC_MACH_SPLIT) { kinds.push(0); conf.push(1); continue; }
+    const p = probs[k++];
+    kinds.push(p >= 0.5 ? 2 : 1);
+    conf.push(Math.max(p, 1 - p));
+  }
+  return { kinds, conf, gm };
+}
+
 /**
  * tones = [{start, end, el?}] in ms, time order; el = known element (automatic keyer), missing/null = classify by
  * length. morse = {char: code}. opts.machine = a stream of a HW keyer (0.14.0): elements and gaps inside characters
@@ -322,11 +481,15 @@ class DecoderState {
  * chars: [{ch, code, i0, i1}], marks, gaps (null for the first tone), fixes, dot, dash, g1, g3, wpm, tones} – the
  * estimates at the end, wpm from the unit estimate, tones = the input (machine: with el and u).
  * Machine stream (0.15.4, diagnostics): units = each gap in dots, words = the word threshold in dots it was judged
- * by (null for the first tone; empty arrays otherwise).
+ * by (null for the first tone; empty arrays otherwise). opts.model (1.1 K2): conf = the probability of the class of
+ * each gap, gm = the fitted GapModel (gm.learned() → opts.gapPrior of the next over); null without the model.
  */
 export function decodeTones(tones, wpm, morse, opts = {}) {
   const machine = !!opts.machine;
   if (machine) tones = machineTones(tones, opts.dot || 1200 / wpm);
+  // 1.1 K2: opts.model = the gaps of a machine stream from the gap model of the whole over (opts.gapPrior = learned()
+  // of the earlier overs) – for reading a finished over; the live reading keeps the threshold of earlier gaps
+  const gm = machine && opts.model ? modelGaps(machineUnits(tones), opts.gapPrior || null) : null;
   const byCode = {};
   for (const [ch, code] of Object.entries(morse)) if (!(code in byCode)) byCode[code] = ch;
   const st = new DecoderState(initialDot(tones, wpm));
@@ -376,7 +539,7 @@ export function decodeTones(tones, wpm, morse, opts = {}) {
         const u = (tu + g) / 2;
         const x = (ms + (tu - g) / 2) / u;
         const word = machineWordGap(human.slice(-DEC_MACH_GAPS), opts.word || DEC_MACH_WORD);
-        kind = st.gap(ms, machineGapKind(x, 1, word));
+        kind = st.gap(ms, gm ? gm.kinds[i] : machineGapKind(x, 1, word));
         units.push(x);
         words.push(word);
         if (x >= DEC_MACH_SPLIT) human.push(x);
@@ -409,6 +572,7 @@ export function decodeTones(tones, wpm, morse, opts = {}) {
     codes: chars.map((c) => c.code),
     chars, marks, gaps, fixes, units, words,
     dot: st.dot, dash: st.dash, g1: st.g1, g3: st.g3, wpm: 1200 / st.unit(), tones,
+    conf: gm ? gm.conf : null, gm: gm ? gm.gm : null,
   };
 }
 

@@ -31,7 +31,8 @@ MAX_LESSONS_RETURNED = 500
 # Settings synchronized between devices (volume stays separate on each device).
 SETTINGS_RULES = {"wpm": (12, 40), "fwpm": (3, 40), "freq": (350, 900), "lessonMin": (1, 10),
                   "autoSpeed": (0, 1),   # M6: the coach controls the pace (1 = yes)
-                  "extraChars": (0, 1)}  # 0.9.6: learn also the optional extension (rare punctuation)
+                  "extraChars": (0, 1),
+                  "sendChars": (0, 51), "sendWpm": (0, 40)}  # 1.0.2: sending – own characters and tempo (0 = not set yet)  # 0.9.6: learn also the optional extension (rare punctuation)
 
 
 def err(msg, code=400):

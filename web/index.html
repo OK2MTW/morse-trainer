@@ -9,6 +9,7 @@
   <link rel="icon" href="/icons/icon-192.png">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <link rel="stylesheet" href="/css/app.css">
+  <script src="/js/theme.js"></script>
   <script type="module" src="/js/main.js"></script>
 </head>
 <body>
@@ -21,6 +22,7 @@
       <!-- 0.10.10 (Martin): copy behind and vocabulary as own views next to Home; Progress in the user menu -->
       <button type="button" data-go="copyhome" class="training-only" data-i18n="nav.copy">Copy</button>
       <button type="button" data-go="vocab" class="training-only" data-i18n="nav.vocab">Abbrev.</button>
+      <button type="button" data-go="key" class="keylab-only" hidden data-i18n="nav.send">Sending</button>
       <button type="button" data-go="cw" class="member-only" data-i18n="nav.cw">CW Chat</button>
       <div class="usermenu">
         <button type="button" id="user-btn" class="avatar" aria-haspopup="true" aria-expanded="false"
@@ -616,6 +618,8 @@
               <label><span data-i18n="vo.myCall">My call sign</span> <input type="text" id="cw-vo-mycall" maxlength="12" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
               <label><span data-i18n="vo.wpm">Speed of the operator</span> <select id="cw-vo-wpm"></select></label>
               <label><span data-i18n="vo.fw">Longer gaps (Farnsworth)</span> <select id="cw-vo-fw"></select></label>
+              <label><span data-i18n="vo.tol">Tolerance of gaps</span> <select id="cw-vo-tol"></select></label>
+              <p class="hint" id="cw-vo-tol-hint"></p>
               <label><span data-i18n="vo.show">Text of the operator</span> <select id="cw-vo-show"></select></label>
               <label><span data-i18n="cw.presetLabel">Interference</span> <select id="cw-vo-preset"></select></label>
               <label id="cw-vo-keytempo-row" class="fw-midi-row" hidden><input type="checkbox" id="cw-vo-keytempo"> <span data-i18n="vo.keyTempo">My QRS / QRQ changes the speed of my key too (USB MIDI)</span></label>
@@ -643,13 +647,18 @@
 
     <!-- ===== SETTINGS ===== -->
     <section id="view-settings" class="view" hidden>
-      <div class="card">
-        <h2 data-i18n="settings.language">Language</h2>
+      <details name="settings" class="card set-sec">
+        <summary><h2 data-i18n="settings.language">Language</h2></summary>
         <label class="lang-pick"><select class="lang-select" aria-label="Language" data-i18n-attr="aria-label:settings.language"></select></label>
         <p class="hint" data-i18n="settings.languageHint">Applies to this device; when you are logged in, also to your other devices.</p>
-      </div>
-      <div class="card training-only">
-        <h2 data-i18n="settings.sound">Sound and speed</h2>
+      </details>
+      <details name="settings" class="card set-sec">
+        <summary><h2 data-i18n="settings.look">Appearance</h2></summary>
+        <label class="band-slider"><span data-i18n="settings.theme">Background</span> <select id="theme-select"></select></label>
+        <p class="hint" id="theme-hint"></p>
+      </details>
+      <details name="settings" class="card set-sec training-only">
+        <summary><h2 data-i18n="settings.sound">Sound and speed</h2></summary>
         <div class="stepper" data-key="wpm" data-min="12" data-max="40" data-step="1" data-unit=" WPM">
           <span class="st-label" data-i18n="settings.wpm">Character speed</span></div>
         <div class="stepper" data-key="fwpm" data-min="3" data-max="40" data-step="1" data-unit=" WPM">
@@ -667,9 +676,9 @@
           <button type="button" id="play-k" data-i18n="settings.playK">Play K</button>
           <button type="button" id="play-paris" data-i18n="settings.playParis">Play PARIS PARIS</button>
         </div>
-      </div>
-      <div class="card training-only">
-        <h2 data-i18n="settings.lesson">Lesson</h2>
+      </details>
+      <details name="settings" class="card set-sec training-only">
+        <summary><h2 data-i18n="settings.lesson">Lesson</h2></summary>
         <div class="stepper" data-key="lessonMin" data-min="1" data-max="10" data-step="1" data-unit=" min">
           <span class="st-label"><span data-i18n="settings.lessonMin">Lesson length</span> <small data-i18n="settings.lessonMinHint">(block)</small></span></div>
         <p class="hint" data-i18n="settings.lessonHint">5–10 min recommended. After 30 min of continuous practice the coach suggests stopping, above 60 min a day it warns.</p>
@@ -677,26 +686,21 @@
           <span class="st-label"><span data-i18n="settings.level">Number of characters</span> <small data-i18n="settings.levelHint">(manual)</small></span></div>
         <p class="hint" data-i18n="entry.settingsHint">Already know CW? The entry test finds out which characters you know.</p>
         <button type="button" class="btn-entry" data-i18n="entry.start">▶ Entry test</button>
-      </div>
-      <div class="card coach-only" hidden>
-        <h2 data-i18n="band.title">Band sound (listening test)</h2>
+      </details>
+      <details name="settings" class="card set-sec coach-only" hidden>
+        <summary><h2 data-i18n="band.title">Band sound (listening test)</h2></summary>
         <p class="hint" data-i18n="band.settingsHint">Development: noise, fading, interference and real keying – for coaches only.</p>
         <button type="button" data-go="band" data-i18n="band.open">🎧 Open band sound</button>
-      </div>
-      <div class="card keylab-only" hidden>
-        <h2 data-i18n="key.title">Telegraph key (experimental)</h2>
-        <p class="hint" data-i18n="key.settingsHint">Sending with the HW key CwKey (USB). Without the HW key you cannot send.</p>
-        <button type="button" data-go="key" data-i18n="key.open">🔑 Open the key</button>
-      </div>
-      <div class="card">
-        <h2 data-i18n="settings.diag">Diagnostics</h2>
+      </details>
+      <details name="settings" class="card set-sec">
+        <summary><h2 data-i18n="settings.diag">Diagnostics</h2></summary>
         <button type="button" id="install" hidden data-i18n="settings.install">⬇ Install as an app</button>
         <p class="hint" id="install-hint" hidden data-i18n="settings.installHint">The browser does not offer installation? In Chrome: menu ⋮ → Add to home screen (or Install app). On a phone with parental controls (Family Link) installing may be blocked – the app works in the browser too, just bookmark it.</p>
         <table class="diag"><tbody id="diag"></tbody></table>
         <p class="hint"><a id="other-site" href="/" rel="noopener"></a><br><span data-i18n="settings.sitesHint">The home and outside versions are two separate
           apps (each with its own login); lessons are synchronized through the account.</span></p>
         <p class="hint"><a href="/o-aplikaci.html" data-i18n="settings.aboutLink">About, licences and acknowledgements</a></p>
-      </div>
+      </details>
     </section>
     <!-- ZB (development): band sound listening lab – coaches only -->
     <section id="view-band" class="view" hidden>
@@ -746,6 +750,14 @@
               <p class="hint" id="send-lesson-hint"></p>
               <button type="button" id="send-lesson-start" data-i18n="send.lesson.start" disabled>Start the lesson</button>
             </div>
+            <!-- 1.0.2 (Martin): sending has its own characters and tempo – not bound to receiving -->
+            <div class="stepper" data-key="sendChars" data-min="2" data-max="51" data-step="1" data-unit-key="settings.unitChars">
+              <span class="st-label"><span data-i18n="send.chars">Characters for sending</span> <small id="send-chars-list"></small></span></div>
+            <div class="stepper" data-key="sendWpm" data-min="10" data-max="40" data-step="1" data-unit=" WPM">
+              <span class="st-label" data-i18n="send.wpmSet">Sending tempo</span></div>
+            <p class="hint" data-i18n="send.ownHint">Characters and tempo of sending are independent of receiving – they may be ahead or behind.</p>
+            <div class="buttons"><button type="button" id="send-wpm-key" hidden data-i18n="send.wpmToKey">Set on the key</button>
+              <span class="hint" id="send-wpm-key-msg" aria-live="polite"></span></div>
             <label class="band-slider"><span data-i18n="send.ex.kindLabel">Sending exercise</span> <select id="send-ex-kind"></select></label>
             <p class="hint" id="send-ex-intro"></p>
             <button type="button" id="send-ex-start" data-i18n="send.ex.start">Start the exercise</button>

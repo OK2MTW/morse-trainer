@@ -194,3 +194,61 @@ class PortTest(unittest.TestCase):
                      "if (asked && VO_TOPICS.includes(p) && !h.asks.includes(p)) h.asks.push(p);",
                      "h.rst = rst && RST_RE.test(rst) ? rst : (plain.find((tk) => RST_RE.test(tk)) || null);"):
             self.assertIn(frag, V.VO_JS)
+
+
+class ToleranceTest(unittest.TestCase):
+    """1.0.1: the VO mends the spacing by the level of the sender (characters are never guessed)."""
+    CALLS = ['OL5ABC', 'OK2MTW']
+
+    def test_join_and_split(self):
+        for text, high, mid in (
+                ('QR S K', 'QRS K', 'QRS K'),
+                ('Q R Q', 'QRQ', 'Q R Q'),
+                ('OK2 MTW DE OL5 ABC K', 'OK2MTW DE OL5ABC K', 'OK2MTW DE OL5ABC K'),
+                ('DE OK2MTWK', 'DE OK2MTW K', 'DE OK2MTW K'),
+                ('QRSK', 'QRS K', 'QRS K'),
+                ('R ST 5 99', 'RST 599', 'RST 599'),
+                ('73 TU S K', '73 TU SK', '73 TU SK'),
+                ('W X? K', 'WX? K', 'WX? K'),
+                ('QTH ?', 'QTH ?', 'QTH ?'),
+                ('NAME MARTIN MARTIN', 'NAME MARTIN MARTIN', 'NAME MARTIN MARTIN')):
+            self.assertEqual(V.mend_spacing(text, 'high', self.CALLS), high, text)
+            self.assertEqual(V.mend_spacing(text, 'mid', self.CALLS), mid, text)
+            self.assertEqual(V.mend_spacing(text, 'off', self.CALLS), text, text)
+
+    def test_wrong_characters_stay_wrong(self):
+        for text in ('QR 5 K', 'QRX K', 'OK2 MTV', 'QR SS K', 'DE OK2MTVK'):
+            self.assertEqual(V.mend_spacing(text, 'high', self.CALLS), text, text)
+
+    def test_content_words_unchanged(self):
+        words = [w for k in ('NAMES', 'QTH', 'RIG', 'ANT') for x in V.QSO[k] for w in x.split()]
+        self.assertEqual([w for w in words if V.mend_spacing(w, 'high') != w], [])
+
+    def test_vo_reacts_to_split_qrs(self):
+        for tol, reacts in (('high', True), ('mid', True), ('off', False)):
+            vo = V.VirtualOperator(user_call='OK2MTW', rng=rng_of(3), tol=tol)
+            first = vo.reply('CQ CQ DE OK2MTW K')['text']
+            r = vo.reply('QR S PSE K')
+            self.assertEqual(r['heard']['qrs'], reacts, tol)
+            if reacts:
+                self.assertEqual((r['text'], r['wpm'], r['heard']['read']), (first, V.VO_WPM - V.VO_QRS, 'QRS PSE K'))
+            else:
+                self.assertIsNone(r['heard']['read'])
+
+    def test_split_call_reaches_the_vo(self):
+        vo = V.VirtualOperator(user_call='OK2MTW', rng=rng_of(5), tol='high')
+        v = vo.call
+        r = vo.reply(f'{v[:3]} {v[3:]} DE OK2 MTW K')
+        self.assertTrue(r['heard']['to_vo'])
+        self.assertEqual(vo.phase, 'reported')
+
+    def test_step_mapping_and_js(self):
+        self.assertEqual([V.tol_for_step(i) for i in range(4)], ['high', 'high', 'mid', 'mid'])
+        self.assertEqual(V.VO_TOLS, ['auto', 'high', 'mid', 'off'])
+        self.assertEqual(V.VO_TOL_JOIN, {'high': 3, 'mid': 2, 'off': 0})
+        for frag in ("export const tolForStep = (index) => (index >= 2 ? 'mid' : 'high');",
+                     "if (known(a) && known(b) && a.length >= 2 && (b.length >= 2 || OVER_ENDS.includes(b))) split = [a, b + q];",
+                     "const known = (w) => KNOWN.has(w) || RST_RE.test(w) || cs.includes(w);",
+                     "units && units.length ? segment(units, this.tol, calls) : mendSpacing(text, this.tol, calls)",
+                     "const h = hear(read, this.p.call, this.user);"):
+            self.assertIn(frag, V.VO_JS)
