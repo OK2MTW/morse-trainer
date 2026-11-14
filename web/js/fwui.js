@@ -91,6 +91,7 @@ export function initFwUi() {
 
   function openWizard() {
     $('#fw-offer').hidden = true;
+    $('#fw-box').open = true;   // 1.1.6: the firmware card is collapsed by default
     $('#fw-wizard').hidden = false;
     $('#fw-ver').value = '0'; // the newest unless the user picks an older one
     renderChips();

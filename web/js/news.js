@@ -25,7 +25,10 @@ export const NEWS = [
   { id: 16, version: '1.1.0', at: '2026-11-14T02:00:00Z', items: ['news.voHand'] },
   { id: 17, version: '1.1.2', at: '2026-11-14T02:54:00Z', items: ['news.voLex'] },
   { id: 18, version: '1.1.3', at: '2026-11-14T03:18:00Z', items: ['news.keyRead'] },
-  { id: 19, version: '1.1.4', at: '2026-11-14T07:00:00Z', items: ['news.keyTempoIn'] },
+  { id: 19, version: '1.1.4', at: '2026-11-14T06:41:00Z', items: ['news.keyTempoIn'] },
+  { id: 20, version: '1.1.5', at: '2026-11-14T06:56:00Z', items: ['news.sendDrill'] },
+  { id: 21, version: '1.1.6', at: '2026-11-14T07:07:00Z', items: ['news.sendTidy'] },
+  { id: 22, version: '1.1.7', at: '2026-11-14T07:22:00Z', items: ['news.drillLive'] },
 ];
 
 const LATEST = Math.max(0, ...NEWS.map((n) => n.id));

@@ -730,7 +730,7 @@
     <!-- VK (0.11.0): telegraph key – keyer, sidetone, converter test (experimental, coaches only) -->
     <section id="view-key" class="view" hidden>
       <div class="card">
-        <h2 data-i18n="key.title">Telegraph key (experimental)</h2>
+        <h2 data-i18n="key.title">Sending</h2>
         <div id="key-nokey" class="key-hw-detect">
           <p><strong data-i18n="key.noKey">Connect the HW key CwKey (USB) and press a paddle.</strong></p>
           <p class="hint" data-i18n="key.noKeyHint">Sending needs the HW key: it forms the dots and dashes itself, the app reads them and decodes. Without the key you can still listen and train receiving. A new key or a key that does not respond: see the CwKey firmware card below and the key manual.</p>
@@ -750,17 +750,24 @@
               <p class="hint" id="send-lesson-hint"></p>
               <button type="button" id="send-lesson-start" data-i18n="send.lesson.start" disabled>Start the lesson</button>
             </div>
-            <!-- 1.0.2 (Martin): sending has its own characters and tempo – not bound to receiving -->
-            <div class="stepper" data-key="sendChars" data-min="2" data-max="51" data-step="1" data-unit-key="settings.unitChars">
-              <span class="st-label"><span data-i18n="send.chars">Characters for sending</span> <small id="send-chars-list"></small></span></div>
-            <div class="stepper" data-key="sendWpm" data-min="10" data-max="40" data-step="1" data-unit=" WPM">
-              <span class="st-label" data-i18n="send.wpmSet">Sending tempo</span></div>
-            <p class="hint" data-i18n="send.ownHint">Characters and tempo of sending are independent of receiving – they may be ahead or behind.</p>
-            <div class="buttons"><button type="button" id="send-wpm-key" hidden data-i18n="send.wpmToKey">Set on the key</button>
-              <span class="hint" id="send-wpm-key-msg" aria-live="polite"></span></div>
-            <label class="band-slider"><span data-i18n="send.ex.kindLabel">Sending exercise</span> <select id="send-ex-kind"></select></label>
-            <p class="hint" id="send-ex-intro"></p>
-            <button type="button" id="send-ex-start" data-i18n="send.ex.start">Start the exercise</button>
+            <!-- 1.1.7: the lesson is the main way (saved, moves you on); the free exercise is collapsed -->
+            <details id="send-free" class="send-setup">
+              <summary data-i18n="send.ex.freeTitle">Free exercise (not saved)</summary>
+              <label class="band-slider"><span data-i18n="send.ex.kindLabel">Sending exercise</span> <select id="send-ex-kind"></select></label>
+              <p class="hint" id="send-ex-intro"></p>
+              <button type="button" id="send-ex-start" data-i18n="send.ex.start">Start the exercise</button>
+            </details>
+            <!-- 1.0.2: own characters and tempo of sending; 1.1.6: collapsed, the summary shows the values -->
+            <details id="send-setup" class="send-setup">
+              <summary><span data-i18n="send.setup">Characters and tempo</span> <small id="send-setup-sum" class="hint"></small></summary>
+              <div class="stepper" data-key="sendChars" data-min="2" data-max="51" data-step="1" data-unit-key="settings.unitChars">
+                <span class="st-label"><span data-i18n="send.chars">Characters for sending</span> <small id="send-chars-list"></small></span></div>
+              <div class="stepper" data-key="sendWpm" data-min="10" data-max="40" data-step="1" data-unit=" WPM">
+                <span class="st-label" data-i18n="send.wpmSet">Sending tempo</span></div>
+              <p class="hint" data-i18n="send.ownHint">Characters and tempo of sending are independent of receiving – they may be ahead or behind.</p>
+              <div class="buttons"><button type="button" id="send-wpm-key" hidden data-i18n="send.wpmToKey">Set on the key</button>
+                <span class="hint" id="send-wpm-key-msg" aria-live="polite"></span></div>
+            </details>
           </div>
           <div id="send-ex-run" hidden>
             <p class="hint" id="send-ex-progress"></p>
@@ -771,104 +778,110 @@
           <p class="hint" id="send-ex-hint"></p>
           <div class="buttons">
             <button type="button" id="send-ex-done" data-i18n="send.ex.done">Done (Enter)</button>
+            <button type="button" id="send-ex-play" data-i18n="send.drill.play" hidden>Play again</button>
             <button type="button" id="send-ex-next" data-i18n="send.ex.next" hidden>Next (Enter)</button>
             <button type="button" id="send-ex-again" data-i18n="send.ex.again" hidden>Another series</button>
             <button type="button" id="send-ex-stop" data-i18n="send.ex.stop">End the exercise</button>
           </div>
           <div id="send-ex-result" hidden></div>
         </div>
+        <p class="hint key-label" data-i18n="key.textLabel">You send (read strictly by the norm):</p>
         <p class="key-text" id="key-text" aria-live="polite">–</p>
-        <p class="hint key-codes" id="key-codes"></p>
         <p class="key-read" id="key-read" aria-live="polite" hidden></p>
-        <p class="hint" id="key-hand" hidden></p>
         <div id="key-free">
-          <p class="hint" id="key-est"></p>
-          <div id="key-eval" class="send-eval" hidden></div>
-          <p class="hint" data-i18n="key.outHint">The decoder learns your rhythm from the neighbouring elements (dot and dash lengths and the gaps inside characters, between characters and words) – you do not have to keep the set tempo. Fix a mistake with 7 or more dots – it erases the word in progress, or the word just finished.</p>
           <button type="button" id="key-clear" data-i18n="key.clear">Clear the transcript</button>
-          <details id="key-diag-box">
-            <summary data-i18n="key.diag.title">How the decoder reads</summary>
-            <p class="hint" data-i18n="key.diag.hint">The last words gap by gap, in dots of your key. Inside a character the key keeps 1 dot; between letters you should leave about 3, between words about 7. Gaps marked with ⚠ are close to a threshold.</p>
-            <p class="hint" id="key-diag-head"></p>
-            <ol id="key-diag" class="key-diag"></ol>
-            <button type="button" id="key-diag-copy" data-i18n="key.diag.copy">Copy</button>
-            <p class="hint" id="key-diag-status" aria-live="polite"></p>
+          <details id="key-stats" class="key-stats">
+            <summary><span data-i18n="key.stats">Analysis of the sending</span> <small id="key-stats-sum" class="hint"></small></summary>
+            <p class="hint" id="key-hand" hidden></p>
+            <p class="hint key-codes" id="key-codes"></p>
+            <p class="hint" id="key-est"></p>
+            <div id="key-eval" class="send-eval" hidden></div>
+            <p class="hint" data-i18n="key.outHint">The decoder learns your rhythm from the neighbouring elements (dot and dash lengths and the gaps inside characters, between characters and words) – you do not have to keep the set tempo. Fix a mistake with 7 or more dots – it erases the word in progress, or the word just finished.</p>
+            <details id="key-diag-box">
+              <summary data-i18n="key.diag.title">How the decoder reads</summary>
+              <p class="hint" data-i18n="key.diag.hint">The last words gap by gap, in dots of your key. Inside a character the key keeps 1 dot; between letters you should leave about 3, between words about 7. Gaps marked with ⚠ are close to a threshold.</p>
+              <p class="hint" id="key-diag-head"></p>
+              <ol id="key-diag" class="key-diag"></ol>
+              <button type="button" id="key-diag-copy" data-i18n="key.diag.copy">Copy</button>
+              <p class="hint" id="key-diag-status" aria-live="polite"></p>
+            </details>
+            <div id="key-rec" hidden>
+              <p class="hint" data-i18n="key.rec.hint">Recording for tuning the decoder: write what you sent, then send it.</p>
+              <input type="text" id="key-rec-text" maxlength="200" autocomplete="off" data-i18n-attr="placeholder:key.rec.placeholder">
+              <button type="button" id="key-rec-send" data-i18n="key.rec.send">Send the recording</button>
+              <p class="hint" id="key-rec-status" aria-live="polite"></p>
+            </div>
           </details>
-          <div id="key-rec" hidden>
-            <p class="hint" data-i18n="key.rec.hint">Recording for tuning the decoder: write what you sent, then send it.</p>
-            <input type="text" id="key-rec-text" maxlength="200" autocomplete="off" data-i18n-attr="placeholder:key.rec.placeholder">
-            <button type="button" id="key-rec-send" data-i18n="key.rec.send">Send the recording</button>
-            <p class="hint" id="key-rec-status" aria-live="polite"></p>
-          </div>
         </div>
       </div>
       <div class="card">
-        <h2 data-i18n="key.hwTitle">HW key CwKey (USB)</h2>
-        <p class="hint" data-i18n="key.typeHint.hw">A key with its own keyer and buzzer (a USB keyboard): the key forms the dots and dashes, the app reads only the stream key (default F13), decodes and evaluates. Speed and swapping the paddles are set on the key.</p>
-        <label class="check"><input type="checkbox" id="key-sidetone"> <span data-i18n="key.sidetone">Sidetone</span> <small data-i18n="key.sidetoneHint">(the key has its own buzzer)</small></label>
-        <p class="hint" id="key-map"></p>
-        <div class="buttons">
-          <button type="button" id="key-learn" data-i18n="key.learn">Learn keys</button>
-          <button type="button" id="key-map-reset" data-i18n="key.mapResetHw">Default (F13)</button>
-        </div>
-        <div id="key-learn-box" class="key-learn" hidden>
-          <p id="key-learn-msg" aria-live="polite"></p>
+        <details id="key-hw-box">
+          <summary><h2 data-i18n="key.hwTitle">HW key CwKey (USB)</h2></summary>
+          <p class="hint" data-i18n="key.typeHint.hw">A key with its own keyer and buzzer (a USB keyboard): the key forms the dots and dashes, the app reads only the stream key (default F13), decodes and evaluates. Speed and swapping the paddles are set on the key.</p>
+          <label class="check"><input type="checkbox" id="key-sidetone"> <span data-i18n="key.sidetone">Sidetone</span> <small data-i18n="key.sidetoneHint">(the key has its own buzzer)</small></label>
+          <p class="hint" id="key-map"></p>
           <div class="buttons">
-            <button type="button" id="key-learn-ok" data-i18n="key.learnOk">Confirm (Enter)</button>
-            <button type="button" id="key-learn-again" data-i18n="key.learnAgain">Again</button>
-            <button type="button" id="key-learn-cancel" data-i18n="key.learnCancel">Cancel (Esc)</button>
+            <button type="button" id="key-learn" data-i18n="key.learn">Learn keys</button>
+            <button type="button" id="key-map-reset" data-i18n="key.mapResetHw">Default (F13)</button>
           </div>
-        </div>
+          <div id="key-learn-box" class="key-learn" hidden>
+            <p id="key-learn-msg" aria-live="polite"></p>
+            <div class="buttons">
+              <button type="button" id="key-learn-ok" data-i18n="key.learnOk">Confirm (Enter)</button>
+              <button type="button" id="key-learn-again" data-i18n="key.learnAgain">Again</button>
+              <button type="button" id="key-learn-cancel" data-i18n="key.learnCancel">Cancel (Esc)</button>
+            </div>
+          </div>
+          <details class="key-log-box">
+            <summary data-i18n="key.log">Events (converter acceptance test)</summary>
+            <p class="hint" data-i18n="key.logHint">Time from the first event and the gap to the previous one in ms.</p>
+            <p class="hint" id="key-log-count"></p>
+            <pre id="key-log-sum" class="key-log-sum"></pre>
+            <button type="button" id="key-log-copy" data-i18n="key.logCopy">Copy the log</button>
+            <p class="hint" id="key-log-copy-status" aria-live="polite"></p>
+            <textarea id="key-log-text" class="key-log-text" rows="6" readonly hidden></textarea>
+            <table class="diag key-log"><tbody id="key-log"></tbody></table>
+          </details>
+        </details>
       </div>
       <div class="card" id="fw-card" hidden>
-        <h2 data-i18n="fw.title">CwKey firmware</h2>
-        <p id="fw-avail"></p>
-        <p class="hint" id="fw-installed"></p>
-        <label class="fw-midi-row"><input type="checkbox" id="fw-midi-on"> <span data-i18n="fw.midiOn">Read the version from the key over USB MIDI (FW 0.4.0 and newer, on trial)</span></label>
-        <p class="hint" id="fw-midi-msg" aria-live="polite"></p>
-        <details id="fw-notes-box" hidden>
-          <summary data-i18n="fw.notes">What is new</summary>
-          <pre id="fw-notes" class="fw-notes"></pre>
+        <details id="fw-box">
+          <summary><h2 data-i18n="fw.title">CwKey firmware</h2></summary>
+          <p id="fw-avail"></p>
+          <p class="hint" id="fw-installed"></p>
+          <label class="fw-midi-row"><input type="checkbox" id="fw-midi-on"> <span data-i18n="fw.midiOn">Read the version from the key over USB MIDI (FW 0.4.0 and newer, on trial)</span></label>
+          <p class="hint" id="fw-midi-msg" aria-live="polite"></p>
+          <details id="fw-notes-box" hidden>
+            <summary data-i18n="fw.notes">What is new</summary>
+            <pre id="fw-notes" class="fw-notes"></pre>
+          </details>
+          <button type="button" id="fw-start" hidden></button>
+          <div id="fw-wizard" class="fw-wizard" hidden>
+            <label id="fw-ver-row" hidden><span data-i18n="fw.version">Version</span> <select id="fw-ver"></select></label>
+            <ol>
+              <li>
+                <span data-i18n="fw.step1">Connect the key with a USB cable and press NRST on the module twice quickly (within half a second). A drive STMF411BOOT (F411) or BlackPill (F401) appears and the LED glows.</span>
+                <span id="fw-boot" hidden>
+                  <span data-i18n="fw.bootHint">Or let the app switch the key to the bootloader over MIDI (do not key meanwhile):</span>
+                  <button type="button" id="fw-boot-btn" data-i18n="fw.bootBtn">Switch the key to the bootloader</button>
+                </span>
+              </li>
+              <li id="fw-pick">
+                <span data-i18n="fw.step2pick">Select that drive (its top folder) and allow editing. The app recognises the chip, checks the file and writes it.</span>
+                <button type="button" id="fw-pick-btn" data-i18n="fw.pickBtn">Select the key drive</button>
+              </li>
+              <li id="fw-manual">
+                <span data-i18n="fw.step2manual">This browser cannot write to the drive. Choose the chip (written on the module), download the checked file and copy it to the drive (Android: the Files app, the key on an OTG cable).</span>
+                <label><span data-i18n="fw.chip">Chip</span> <select id="fw-chip"></select></label>
+                <button type="button" id="fw-download" data-i18n="fw.download">Download the file</button>
+                <button type="button" id="fw-copied" data-i18n="fw.copied" hidden>Copied to the drive</button>
+              </li>
+            </ol>
+            <p id="fw-msg" class="hint" aria-live="polite"></p>
+            <p id="fw-done" class="hint" data-i18n="fw.after" hidden>The key restarts by itself (the drive disappears, a warning about removing it is fine). Then one long LED blink and the paddles key again – press one to confirm.</p>
+            <button type="button" id="fw-close" data-i18n="fw.close">Close</button>
+          </div>
         </details>
-        <button type="button" id="fw-start" hidden></button>
-        <div id="fw-wizard" class="fw-wizard" hidden>
-          <label id="fw-ver-row" hidden><span data-i18n="fw.version">Version</span> <select id="fw-ver"></select></label>
-          <ol>
-            <li>
-              <span data-i18n="fw.step1">Connect the key with a USB cable and press NRST on the module twice quickly (within half a second). A drive STMF411BOOT (F411) or BlackPill (F401) appears and the LED glows.</span>
-              <span id="fw-boot" hidden>
-                <span data-i18n="fw.bootHint">Or let the app switch the key to the bootloader over MIDI (do not key meanwhile):</span>
-                <button type="button" id="fw-boot-btn" data-i18n="fw.bootBtn">Switch the key to the bootloader</button>
-              </span>
-            </li>
-            <li id="fw-pick">
-              <span data-i18n="fw.step2pick">Select that drive (its top folder) and allow editing. The app recognises the chip, checks the file and writes it.</span>
-              <button type="button" id="fw-pick-btn" data-i18n="fw.pickBtn">Select the key drive</button>
-            </li>
-            <li id="fw-manual">
-              <span data-i18n="fw.step2manual">This browser cannot write to the drive. Choose the chip (written on the module), download the checked file and copy it to the drive (Android: the Files app, the key on an OTG cable).</span>
-              <label><span data-i18n="fw.chip">Chip</span> <select id="fw-chip"></select></label>
-              <button type="button" id="fw-download" data-i18n="fw.download">Download the file</button>
-              <button type="button" id="fw-copied" data-i18n="fw.copied" hidden>Copied to the drive</button>
-            </li>
-          </ol>
-          <p id="fw-msg" class="hint" aria-live="polite"></p>
-          <p id="fw-done" class="hint" data-i18n="fw.after" hidden>The key restarts by itself (the drive disappears, a warning about removing it is fine). Then one long LED blink and the paddles key again – press one to confirm.</p>
-          <button type="button" id="fw-close" data-i18n="fw.close">Close</button>
-        </div>
-      </div>
-      <div class="card">
-        <details>
-          <summary data-i18n="key.log">Events (converter acceptance test)</summary>
-          <p class="hint" data-i18n="key.logHint">Time from the first event and the gap to the previous one in ms.</p>
-          <p class="hint" id="key-log-count"></p>
-          <pre id="key-log-sum" class="key-log-sum"></pre>
-          <button type="button" id="key-log-copy" data-i18n="key.logCopy">Copy the log</button>
-          <p class="hint" id="key-log-copy-status" aria-live="polite"></p>
-          <textarea id="key-log-text" class="key-log-text" rows="6" readonly hidden></textarea>
-          <table class="diag key-log"><tbody id="key-log"></tbody></table>
-        </details>
-        <button type="button" data-go="settings" data-i18n="nav.settings">Settings</button>
       </div>
     </section>
     <!-- 0.10.0: vocabulary trainer -->

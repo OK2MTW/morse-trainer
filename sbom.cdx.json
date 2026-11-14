@@ -431,12 +431,12 @@
     "pkg:pypi/werkzeug@2.2.2",
     "pkg:generic/python@3.11.2"
    ],
-   "ref": "pkg:github/OK2MTW/morse-trainer@1.1.4"
+   "ref": "pkg:github/OK2MTW/morse-trainer@1.1.7"
   }
  ],
  "metadata": {
   "component": {
-   "bom-ref": "pkg:github/OK2MTW/morse-trainer@1.1.4",
+   "bom-ref": "pkg:github/OK2MTW/morse-trainer@1.1.7",
    "licenses": [
     {
      "license": {
@@ -445,21 +445,21 @@
     }
    ],
    "name": "morse-trainer",
-   "purl": "pkg:github/OK2MTW/morse-trainer@1.1.4",
+   "purl": "pkg:github/OK2MTW/morse-trainer@1.1.7",
    "type": "application",
-   "version": "1.1.4"
+   "version": "1.1.7"
   },
   "tools": {
    "components": [
     {
      "name": "tools.sbom (morse-trainer)",
      "type": "application",
-     "version": "1.1.4"
+     "version": "1.1.7"
     }
    ]
   }
  },
- "serialNumber": "urn:uuid:65d7ba1b-ee64-5366-9971-efa7e1e7d022",
+ "serialNumber": "urn:uuid:dc283a3d-cca4-56b9-965a-c0640a7c4123",
  "specVersion": "1.5",
  "version": 1
 }

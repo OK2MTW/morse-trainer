@@ -29,6 +29,7 @@ SEND_MIN_CHARS = int(CONSTS['SEND_MIN_CHARS'])
 SEND_GROUP_LEN = int(CONSTS['SEND_GROUP_LEN'])
 SEND_END_MS = CONSTS['SEND_END_MS']
 SEND_END_UNITS = CONSTS['SEND_END_UNITS']
+SEND_DRILL_NEED = int(CONSTS['SEND_DRILL_NEED'])
 DOT = '.'
 
 
@@ -302,3 +303,61 @@ def hand_habits(metrics, ev=None):
     if n >= HABIT_PADDLE_N:
         out.append({'key': 'paddle', 'v': n})
     return out
+
+
+def shuffled(a, rng, last=None):
+    """Port of sendeval.js shuffled (Fisher–Yates, the first item is not `last`)."""
+    a = list(a)
+    for i in range(len(a) - 1, 0, -1):
+        j = int(rng() * (i + 1))
+        a[i], a[j] = a[j], a[i]
+    if len(a) > 1 and a[0] == last:
+        a[0], a[1] = a[1], a[0]
+    return a
+
+
+class CharDrill:
+    """1.1.5: port of sendeval.js CharDrill – single characters until right SEND_DRILL_NEED× in a row, a shuffled
+    round over all characters = one lesson."""
+
+    def __init__(self, chars, rng, need=SEND_DRILL_NEED, last=None):
+        self.need = need
+        self.bag = shuffled(list(dict.fromkeys(chars)), rng, last)
+        self.i = self.streak = self.tries = self.attempts = self.ok = 0
+        self.misses = []
+
+    @property
+    def cur(self):
+        return self.bag[self.i] if self.i < len(self.bag) else None
+
+    def record(self, ok, got=None):
+        if self.cur is None:
+            return 'round'
+        self.attempts += 1
+        self.tries += 1
+        if ok:
+            self.ok += 1
+            self.streak += 1
+        else:
+            self.streak = 0
+            self.misses.append((self.cur, got))
+        if self.streak < self.need:
+            return 'again'
+        self.i += 1
+        self.streak = self.tries = 0
+        return 'round' if self.i >= len(self.bag) else 'next'
+
+
+def drill_live(drill, chars, seen, final):
+    """1.1.7: port of keyerui.js drillLive without the UI – the characters of one attempt (decoded, without spaces)
+    counted one by one from `seen`; the last one only when the attempt is over (it may still grow). Returns (seen,
+    result of the last record or None)."""
+    upto = len(chars) if final else len(chars) - 1
+    r = None
+    while seen < upto:
+        got = chars[seen] or '*'
+        seen += 1
+        r = drill.record(got == drill.cur, got)
+        if r != 'again':
+            return seen, r
+    return seen, r

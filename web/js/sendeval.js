@@ -35,6 +35,7 @@ export const SEND_MIN_CHARS = 10;       // characters of the receive level, at l
 export const SEND_GROUP_LEN = 5;        // a group of 5 characters
 export const SEND_END_MS = 2000;        // a task ends after silence of 2 s …
 export const SEND_END_UNITS = 7;        // … but at least 7 dot lengths (slow sending)
+export const SEND_DRILL_NEED = 3;       // 1.1.5 step char: a character repeats until sent right 3× in a row
 
 const DOT = '.';
 
@@ -274,6 +275,70 @@ export function sendTask(kind, chars, rng, prev = null) {
   if (kind === 'word') return word(chars, rng);
   const avail = chars.length > 1 ? chars.filter((c) => c !== prev) : chars;
   return pick(avail, rng);
+}
+
+/**
+ * 1.1.5 (Martin 2026-11-14): the drill of single characters (step / exercise `char`). All characters of the list in a
+ * pseudo-random order (a shuffled bag, a new one every round, not starting with the last character); the app first
+ * plays a new character, the student sends it until right SEND_DRILL_NEED times in a row, then the next one comes.
+ * One round over all characters = one lesson. record(ok) → 'again' | 'next' | 'round'.
+ */
+export class CharDrill {
+  constructor(chars, rng = Math.random, need = SEND_DRILL_NEED, last = null) {
+    this.rng = rng;
+    this.need = need;
+    this.bag = shuffled([...new Set(chars)], rng, last);
+    this.i = 0; this.streak = 0; this.tries = 0; this.attempts = 0; this.ok = 0;
+    this.misses = [];   // 1.1.7: [want, got] of the wrong characters (the confusions of the summary)
+  }
+
+  get cur() { return this.bag[this.i] ?? null; }
+  get done() { return this.i; }
+  get total() { return this.bag.length; }
+
+  record(ok, got = null) {
+    if (this.cur === null) return 'round';
+    this.attempts++;
+    this.tries++;
+    if (ok) { this.ok++; this.streak++; } else { this.streak = 0; this.misses.push([this.cur, got]); }
+    if (this.streak < this.need) return 'again';
+    this.i++; this.streak = 0; this.tries = 0;
+    return this.i >= this.bag.length ? 'round' : 'next';
+  }
+}
+
+/**
+ * 1.1.7: the summary of a drill round – the form metrics from the attempts (sessionSummary of their evaluations), the
+ * correctness and the confusions from the drill: every sent character counted on its own (A A A = three answers).
+ */
+export function drillSummary(list, drill, morse) {
+  const s = sessionSummary(list);
+  const n = drill.attempts;
+  const v = n ? drill.ok / n : 0;
+  s.acc = { ok: drill.ok, sub: n - drill.ok, del: 0, ins: 0, n, v,
+    st: v >= EVAL_ACC_GOOD ? 'good' : (v >= EVAL_ACC_OK ? 'ok' : 'bad') };
+  const cnt = new Map();
+  for (const [want, got] of drill.misses) {
+    const k = `${want}>${got ?? '*'}`;
+    cnt.set(k, (cnt.get(k) || 0) + 1);
+  }
+  s.conf = [...cnt].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, c]) => {
+    const [want, got] = k.split('>');
+    return { want, wantCode: morse[want] ?? '', got, gotCode: morse[got] ?? '', n: c };
+  });
+  s.subs = drill.misses.map(([want, got]) => ({ want, wantCode: morse[want] ?? '', got, gotCode: morse[got] ?? '' }));
+  s.tasks = n;
+  return s;
+}
+
+/** Fisher–Yates; the first item is not `last` (when there are two or more). */
+function shuffled(a, rng, last = null) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  if (a.length > 1 && a[0] === last) [a[0], a[1]] = [a[1], a[0]];
+  return a;
 }
 
 /**

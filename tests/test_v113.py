@@ -23,8 +23,8 @@ class KeyReadTest(unittest.TestCase):
     def test_lines_on_the_page(self):
         a = HTML.index('id="key-text"')
         b = HTML.index('id="key-free"')
-        for el in ('id="key-read"', 'id="key-hand"'):
-            self.assertIn(el, HTML[a:b])   # visible in free keying and in lessons, outside the free-keying box
+        self.assertIn('id="key-read"', HTML[a:b])   # visible in free keying and in lessons, outside the free-keying box
+        self.assertIn('id="key-hand"', HTML[b:HTML.index('id="key-hw-box"')])   # 1.1.6: in the collapsed analysis
 
     def test_texts_cs_en(self):
         for lang in ('cs', 'en'):

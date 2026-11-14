@@ -99,6 +99,7 @@ th { color: var(--muted); font-weight: 500; }
 .big-char { font-size: 6rem; line-height: 1.1; font-weight: 700; min-height: 1.15em; }
 .big-char.ok { color: var(--ok); }
 .big-char.bad { color: var(--bad); }
+#send-ex-hint.bad { color: var(--bad); }
 .big-char.miss { color: var(--miss); }
 .stage-status { min-height: 1.5em; margin: 4px 0 8px; font-size: 1.05rem; }
 .lesson-bar { display: flex; align-items: center; gap: 10px; font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -486,3 +487,9 @@ details.user-edit summary { cursor: pointer; color: var(--accent); font-size: .8
 .set-sec > summary::after { content: "▸"; color: var(--muted); transition: transform .15s; }
 .set-sec[open] > summary::after { transform: rotate(90deg); }
 .set-sec[open] > summary { margin-bottom: 10px; }
+
+/* 1.1.6: the Sending page – settings, analysis, HW key and firmware collapsed */
+#view-key details > summary > h2 { display: inline; font-size: 1.1em; margin: 0; }
+#view-key details > summary { cursor: pointer; }
+.send-setup, .key-stats { margin: .6em 0; }
+.key-label { margin-bottom: 0; }

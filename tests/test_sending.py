@@ -14,7 +14,7 @@ SENDEVAL_JS = (Path(__file__).resolve().parent.parent / "web/js/sendeval.js").re
 
 def lesson(i, step, acc, **kw):
     return {"id": f"lesson-{i:04d}", "at": f"2026-11-14T01:{i:02d}:00Z", "step": step, "tasks": 10, "acc": acc,
-            "wpm": 18.5, "detail": {"focus": "charGap", "habits": ["wordShort"], "secret": "dropped"}, **kw}
+            "wpm": 18.5, "detail": {"focus": "charGap", "habits": ["wordShort"], "secret": "dropped"}} | kw
 
 
 class StepStateTest(unittest.TestCase):
@@ -52,6 +52,14 @@ class SendApiTest(unittest.TestCase):
         self.assertEqual(self.student.req("GET", "/api/send").status_code, 403)
         self.assertEqual(self.student.req("POST", "/api/send", json={"lessons": []}).status_code, 403)
         self.assertEqual(Client().req("GET", "/api/send").status_code, 403)
+
+    def test_drill_round_has_many_attempts(self):
+        # 1.1.5: a round of the char drill = all attempts (≥ 3 per character) – up to 500 tasks
+        c = Client()
+        assert c.register(make_invite("trener"), "SendDrill").status_code == 201
+        r = c.req("POST", "/api/send", json={"lessons": [lesson(1, "char", 0.92, tasks=96),
+                                                         lesson(2, "char", 0.92, tasks=501)]}).get_json()
+        self.assertEqual(r["saved"], ["lesson-0001"])
 
     def test_save_progress_export_reset(self):
         c = self.coach

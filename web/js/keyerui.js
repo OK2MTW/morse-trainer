@@ -14,7 +14,7 @@ import { KeyAuto } from './keyauto.js';
 import { segment, overUnits, unsureMarks } from './vo.js';
 import {
   sendMetrics, focusOf, evaluateSending, sessionSummary, sendTask, EVAL_WINDOW, SEND_KINDS, SEND_TASKS,
-  SEND_END_MS, SEND_END_UNITS, handHabits, qsoReady,
+  SEND_END_MS, SEND_END_UNITS, handHabits, qsoReady, CharDrill, SEND_DRILL_NEED, drillSummary,
 } from './sendeval.js';
 import { api } from './api.js';
 import { HwMidi, KEY_WPM_ID, sharedMidi, midiSwitchOn } from './hwmidi.js';
@@ -44,6 +44,15 @@ const ST_MARK = { good: '●', ok: '◐', bad: '○' };   // the colour is not t
  * D3 (0.11.4): form metrics as a list with a status mark + one sentence "focus on" (about the task, not the person).
  * box = an element; m = sendMetrics(); ev = evaluateSending() or null (free sending).
  */
+/**
+ * 1.1.6: the short indicator of the collapsed analysis – one mark per form metric (● good, ◐ so-so, ○ to improve) and
+ * the tempo, e.g. "● ● ◐ ● · ≈ 20 WPM".
+ */
+export function statsIndicator(m, wpm) {
+  const marks = ['ratio', 'inGap', 'charGap', 'wordGap', 'stability'].filter((k) => m[k]).map((k) => ST_MARK[m[k].st]);
+  return [marks.join(' '), `≈ ${Math.round(wpm)} WPM`].filter(Boolean).join(' · ');
+}
+
 export function renderEval(box, m, ev = null) {
   box.textContent = '';
   const ul = document.createElement('ul');
@@ -223,7 +232,8 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
 
   // ---------- sending exercise (D3 step 3, 0.12.0): task → sending → evaluation; a series of SEND_TASKS ----------
   // Nothing goes to the server (that comes with D4, mode `vysilani`). Characters of the receive level.
-  const X = { on: false, phase: null, target: '', tones: [], results: [], timer: null, lesson: null, saved: null };
+  const X = { on: false, phase: null, target: '', tones: [], results: [], timer: null, lesson: null, saved: null,
+    drill: null, last: null, playTok: 0, drillSeen: 0 };   // 1.1.5: the char drill (CharDrill), the last attempt {ok, text, want}
   // 0.17.0 D4: sending lessons – the step comes from the server (GET /api/send), a finished lesson is posted there
   const L = { data: null, loading: false, err: false };
 
@@ -296,6 +306,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
   function exTone(tone) {
     X.tones.push(tone);
     clearTimeout(X.timer);
+    if (X.drill && drillLive(false)) return;   // 1.1.7: three right in a row → the next character at once
     const dec = decode([...X.tones].sort((a, b) => a.start - b.start));
     const wait = Math.max(SEND_END_MS, SEND_END_UNITS * dec.dot);
     X.timer = setTimeout(exFinish, Math.max(0, tone.end - performance.now()) + wait);
@@ -308,6 +319,24 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     renderEx();
   }
 
+  /**
+   * 1.1.5: the app plays the character of the drill first (phase 'listen' – keying is not taken as the answer), then
+   * the student sends it. A newer playback or the end of the exercise cancels the older one.
+   */
+  async function playTarget() {
+    const tok = ++X.playTok;
+    X.tones = [];
+    X.drillSeen = 0;
+    X.phase = 'listen';
+    renderEx();
+    try {
+      if (player.ready || await ensureAudio()) await player.play(X.target).done;
+    } catch (e) { /* no sound – the student sends anyway */ }
+    if (tok !== X.playTok || !X.on || X.phase !== 'listen') return;
+    X.phase = 'send';
+    renderEx();
+  }
+
   function exStart(lesson = false) {
     releaseAll();
     X.lesson = lesson && L.data?.state ? L.data.state.step : null;
@@ -315,7 +344,15 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     X.on = true;
     X.results = [];
     X.target = '';
-    exNewTask();
+    X.last = null;
+    if (kindNow() === 'char') {   // 1.1.5: the drill – a shuffled round over all characters
+      X.drill = new CharDrill(getChars(), Math.random, SEND_DRILL_NEED, X.drill?.bag.at(-1) ?? null);
+      X.target = X.drill.cur;
+      playTarget();
+    } else {
+      X.drill = null;
+      exNewTask();
+    }
     renderOut();
     $('#send-ex-run').scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
@@ -323,6 +360,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
   function exStop() {
     clearTimeout(X.timer);
     X.timer = null;
+    X.playTok++;
     X.on = false;
     X.phase = null;
     renderEx();
@@ -334,6 +372,14 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     X.timer = null;
     if (X.phase !== 'send') return;
     if (S.manual !== null) return; // the key is still held
+    if (X.drill) {   // 1.1.7: the rest of the attempt; without a change of the character the drill goes on
+      if (!drillLive(true)) {
+        drillAttempt();
+        X.phase = 'send';
+        renderEx();
+      }
+      return;
+    }
     const tones = [...X.tones].sort((a, b) => a.start - b.start);
     const dec = decode(tones);
     const ev = evaluateSending(X.target, dec.tones, dec, MORSE);
@@ -344,6 +390,64 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     X.results.push(ev);
     X.phase = 'result';
     renderEx();
+  }
+
+  /**
+   * 1.1.7: every character of the attempt counts on its own and live (Martin keys "A A A" in one go): the characters
+   * decoded so far, without spaces, from X.drillSeen on; the last one only when the attempt is over (final), as it may
+   * still grow. A change of the character (or the end of the round) closes the attempt. Returns true when it changed.
+   */
+  function drillLive(final) {
+    const dec = decode([...X.tones].sort((a, b) => a.start - b.start));
+    const chars = dec.chars.filter((c) => c.ch !== ' ');
+    const upto = final ? chars.length : chars.length - 1;
+    while (X.drillSeen < upto) {
+      const got = chars[X.drillSeen++].ch || '*';
+      const want = X.target;
+      const ok = got === want;
+      const r = X.drill.record(ok, got);
+      X.last = { ok, text: got, want };
+      if (r === 'again') continue;
+      clearTimeout(X.timer);
+      X.timer = null;
+      drillAttempt();
+      if (r === 'round') {
+        X.phase = 'summary';
+        renderEx();
+        if (X.lesson) lessonSave(drillSummary(X.results, X.drill, MORSE));
+        return true;
+      }
+      X.target = X.drill.cur;
+      playTarget();
+      return true;
+    }
+    renderEx();
+    return false;
+  }
+
+  /** 1.1.7: the tones of the finished attempt → the form analysis of the summary and the recordings; a new attempt. */
+  function drillAttempt() {
+    const tones = [...X.tones].sort((a, b) => a.start - b.start);
+    X.tones = [];
+    X.drillSeen = 0;
+    if (!tones.length) return;
+    const dec = decode(tones);
+    const ev = evaluateSending(X.last?.want || X.target, dec.tones, dec, MORSE);
+    ev.text = dec.text;
+    X.results.push(ev);
+    S.exRec.push({ target: X.last?.want || X.target, text: dec.text, tones: tones.map(rnd) });
+    if (S.exRec.length > EXREC_MAX) S.exRec.shift();
+    auto.item({ target: X.last?.want || X.target, text: dec.text, tones: tones.map(rnd) });
+  }
+
+  /** 1.1.5: the hint of the drill – the last attempt or what to do now. */
+  function drillHint() {
+    const d = X.drill;
+    if (X.phase === 'listen') return t('send.drill.listen');
+    const l = X.last;
+    if (!l) return t('send.drill.go');
+    if (l.want !== X.target) return t('send.drill.newChar', { prev: l.want });
+    return l.ok ? t('send.drill.ok', { k: d.streak, need: d.need }) : t('send.drill.bad', { v: l.text || '?' });
   }
 
   function exNext() {
@@ -396,7 +500,9 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     }
     for (const o of kindSel.options) o.textContent = t(`send.ex.kind.${o.value}`);
     kindSel.value = cfg.exKind;
-    $('#send-ex-intro').textContent = t('send.ex.intro', { n: getChars().length, tasks: SEND_TASKS });
+    $('#send-ex-intro').textContent = cfg.exKind === 'char'
+      ? t('send.drill.intro', { n: getChars().length, need: SEND_DRILL_NEED })
+      : t('send.ex.intro', { n: getChars().length, tasks: SEND_TASKS });
     $('#send-ex-ctl').hidden = X.on;
     $('#send-ex-run').hidden = !X.on;
     // 0.12.2 (validation #32): task → paddles → buttons → evaluation, the free-sending analysis hidden – the paddles
@@ -410,7 +516,17 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     $('#send-ex-next').hidden = X.phase !== 'result';
     $('#send-ex-next').textContent = t(n >= SEND_TASKS ? 'send.ex.summaryBtn' : 'send.ex.next');
     $('#send-ex-again').hidden = X.phase !== 'summary';
-    if (X.phase === 'send') {
+    $('#send-ex-play').hidden = !X.drill || (X.phase !== 'send' && X.phase !== 'listen');
+    $('#send-ex-hint').classList.toggle('bad', !!X.drill && X.phase === 'send' && !!X.last && !X.last.ok
+      && X.last.want === X.target);
+    if (X.drill && (X.phase === 'send' || X.phase === 'listen')) {   // 1.1.5: the char drill
+      const d = X.drill;
+      $('#send-ex-progress').textContent = t('send.drill.progress', { i: d.done + 1, n: d.total, k: d.streak, need: d.need });
+      $('#send-ex-target').textContent = X.target;
+      $('#send-ex-hint').textContent = drillHint();
+      res.hidden = true;
+      res.textContent = '';
+    } else if (X.phase === 'send') {
       $('#send-ex-progress').textContent = t('send.ex.progress', { i: n + 1, n: SEND_TASKS });
       $('#send-ex-target').textContent = X.target;
       $('#send-ex-hint').textContent = t('send.ex.wait');
@@ -426,7 +542,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
       res.textContent = '';
       res.append(reviewRows(ev), evBox);
     } else {
-      const sum = sessionSummary(X.results);
+      const sum = X.drill ? drillSummary(X.results, X.drill, MORSE) : sessionSummary(X.results);
       $('#send-ex-progress').textContent = t(X.lesson ? 'send.lesson.summary' : 'send.ex.summary', {
         n: sum.tasks, step: X.lesson ? t(`send.step.${X.lesson}`) : '',
       });
@@ -486,12 +602,15 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
     $('#key-codes').textContent = r.codes.slice(-12).join(' ');
     scheduleRead();
     $('#key-est').textContent = tones.length >= EST_MIN_TONES ? t('key.estimateHw', { wpm: Math.round(r.wpm) }) : '';
+    const sum = $('#key-stats-sum');   // 1.1.6: the collapsed analysis shows a short indicator
+    sum.textContent = tones.length >= EST_MIN_TONES ? `≈ ${Math.round(r.wpm)} WPM` : '';
     // D3 (0.11.4): form of free sending over the last EVAL_WINDOW tones
     const box = $('#key-eval');
     if (X.on || tones.length < EVAL_MIN_TONES) { box.textContent = ''; box.hidden = true; return; }
     const win = tones.slice(-EVAL_WINDOW);
     const dw = decode(win);
     const m = sendMetrics(dw.tones, dw);
+    sum.textContent = statsIndicator(m, r.wpm);
     box.hidden = false;
     renderEval(box, m);
     const h = document.createElement('p');
@@ -675,6 +794,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
   $('#send-ex-again').addEventListener('click', () => exStart(!!X.lesson));
   $('#send-lesson-start').addEventListener('click', () => { if (!player.ready) ensureAudio(); exStart(true); });
   $('#send-ex-done').addEventListener('click', exFinish);
+  $('#send-ex-play').addEventListener('click', () => { if (X.drill && X.phase !== 'summary') playTarget(); });
   $('#send-ex-next').addEventListener('click', exNext);
   $('#send-ex-stop').addEventListener('click', exStop);
   $('#key-sidetone').addEventListener('change', (e) => { cfg.hwSidetone = e.target.checked; apply(); });
@@ -748,6 +868,11 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
   window.addEventListener('blur', lost);
   document.addEventListener('visibilitychange', () => { if (document.hidden) lost(); });
 
+  /** 1.1.6: the collapsed characters and tempo show their values. */
+  function renderSetupSum() {
+    $('#send-setup-sum').textContent = t('send.setupSum', { n: getChars().length, wpm: Math.round(getSendWpm()) });
+  }
+
   // ---------- 1.0.2: the sending tempo onto the key (USB MIDI, only when the key answers) ----------
   async function probeWpmKey() {
     let ok = false;
@@ -771,7 +896,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
 
   return {
     /** 1.0.2: the characters / tempo of sending changed (Settings steppers on this page). */
-    refresh() { renderEx(); renderLesson(); $('#send-wpm-key-msg').textContent = ''; },
+    refresh() { renderEx(); renderLesson(); renderSetupSum(); $('#send-wpm-key-msg').textContent = ''; },
     render() {
       const fresh = !S.open;   // entering the page (not a re-render)
       S.open = true;
@@ -785,6 +910,7 @@ export function initKeyerUi({ player, ensureAudio, getChars, getSendWpm = () => 
       // the phone output running, so the first press is not cut
       if (!player.ready) ensureAudio();
       renderControls();
+      renderSetupSum();
       renderOut();
       renderLog();
       renderEx();

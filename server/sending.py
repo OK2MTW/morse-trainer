@@ -37,7 +37,7 @@ def clean_lesson(s, num):
         return None
     if s.get("step") not in SEND_STEPS:
         return None
-    tasks = num(s.get("tasks"), 1, 50, int)
+    tasks = num(s.get("tasks"), 1, 500, int)   # 1.1.5: a round of the char drill = attempts (≥ 3 per character)
     acc = num(s.get("acc"), 0, 1, float)
     if tasks is None or acc is None:
         return None
